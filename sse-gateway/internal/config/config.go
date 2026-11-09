@@ -17,6 +17,11 @@ type Config struct {
 	SSEURL          string        `env:"SSE_URL,required"`
 	UpstreamTimeout time.Duration `env:"UPSTREAM_TIMEOUT" envDefault:"30s"`
 
+	// JWKSURL is the identity service's public key set used to verify access tokens at the edge.
+	JWKSURL     string `env:"JWKS_URL,required"`
+	JWTIssuer   string `env:"JWT_ISSUER" envDefault:"iam-service"`
+	JWTAudience string `env:"JWT_AUDIENCE" envDefault:"sse"`
+
 	// RedisURL is optional; without it rate limit counters are kept per instance.
 	RedisURL string `env:"REDIS_URL"`
 
