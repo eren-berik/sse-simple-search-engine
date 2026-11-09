@@ -46,7 +46,7 @@ func TestSearchesByCacheStatus(t *testing.T) {
 
 	assert.Equal(t, 2.0, testutil.ToFloat64(m.searches.WithLabelValues("HIT")))
 	assert.Equal(t, 1.0, testutil.ToFloat64(m.searches.WithLabelValues("MISS")))
-	assert.Equal(t, 2, testutil.CollectAndCount(m.searches), "failed searches are not counted")
+	assert.Equal(t, 0.0, testutil.ToFloat64(m.searches.WithLabelValues("BYPASS")), "failed searches are not counted")
 }
 
 type fakeStore struct {

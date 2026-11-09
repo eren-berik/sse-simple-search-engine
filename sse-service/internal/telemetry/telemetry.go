@@ -44,6 +44,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"provider"}),
 	}
 	reg.MustRegister(m.searches, m.syncRuns, m.syncDuration, m.upserted)
+	// Start at zero: a counter that first appears with value 1 shows no increase.
+	for _, status := range []search.CacheStatus{search.CacheHit, search.CacheMiss, search.CacheBypass} {
+		m.searches.WithLabelValues(string(status))
+	}
 	return m
 }
 

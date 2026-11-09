@@ -29,6 +29,17 @@ func InstrumentAuthenticator(reg prometheus.Registerer, a Authenticator) Authent
 		Help: "Auth events (register, login, refresh, logout) by result.",
 	}, []string{"event", "result"})
 	reg.MustRegister(events)
+	// Start the expected outcomes at zero: a counter that first appears with value 1 shows no increase.
+	for event, results := range map[string][]string{
+		"register": {"success", "username_taken", "invalid_input"},
+		"login":    {"success", "invalid_credentials"},
+		"refresh":  {"success", "invalid_refresh_token", "token_reused"},
+		"logout":   {"success"},
+	} {
+		for _, r := range results {
+			events.WithLabelValues(event, r)
+		}
+	}
 	return &authenticator{Authenticator: a, events: events}
 }
 

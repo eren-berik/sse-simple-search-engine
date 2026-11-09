@@ -33,6 +33,7 @@ type RateLimits struct {
 
 // PerIP limits requests per client IP.
 func (r RateLimits) PerIP(name string, l Limit) fiber.Handler {
+	r.Metrics.initTier(name)
 	return ratelimit.New(ratelimit.Config{
 		Name: name, Max: l.Max, Window: l.Window, Redis: r.Redis, Log: r.Log,
 		OnLimit: func() { r.Metrics.rateLimit(name) },
@@ -42,6 +43,7 @@ func (r RateLimits) PerIP(name string, l Limit) fiber.Handler {
 // PerUser limits requests per authenticated user. It must run after Authenticate: only a
 // verified token's subject can be trusted as the key.
 func (r RateLimits) PerUser(name string, l Limit) fiber.Handler {
+	r.Metrics.initTier(name)
 	return ratelimit.New(ratelimit.Config{
 		Name: name, Max: l.Max, Window: l.Window, Redis: r.Redis, Log: r.Log, Key: userKey,
 		OnLimit: func() { r.Metrics.rateLimit(name) },
