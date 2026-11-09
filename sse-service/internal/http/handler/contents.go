@@ -68,11 +68,12 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 	}
 
 	q := domain.SearchQuery{
-		Keyword: c.Query("q"),
-		Type:    domain.ContentType(c.Query("type")),
-		Sort:    domain.SortBy(c.Query("sort")),
-		Page:    page,
-		PerPage: perPage,
+		Keyword:  c.Query("q"),
+		Type:     domain.ContentType(c.Query("type")),
+		Provider: c.Query("provider"),
+		Sort:     domain.SortBy(c.Query("sort")),
+		Page:     page,
+		PerPage:  perPage,
 	}
 	res, status, err := h.svc.Search(c.UserContext(), q)
 	if err != nil {
@@ -96,9 +97,9 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 
 // Get handles GET /api/v1/contents/:id.
 func (h *ContentHandler) Get(c *fiber.Ctx) error {
-	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
-	if err != nil || id < 1 {
-		return fmt.Errorf("%w: id must be a positive integer", domain.ErrInvalidInput)
+	id, err := pathID(c)
+	if err != nil {
+		return err
 	}
 	content, breakdown, err := h.svc.Get(c.UserContext(), id)
 	if err != nil {

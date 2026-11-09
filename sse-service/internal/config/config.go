@@ -18,8 +18,6 @@ type Config struct {
 	RedisURL string        `env:"REDIS_URL"`
 	CacheTTL time.Duration `env:"CACHE_TTL" envDefault:"90s"`
 
-	Provider1URL       string        `env:"PROVIDER1_URL" envDefault:"https://raw.githubusercontent.com/WEG-Technology/mock/refs/heads/main/v2/provider1"`
-	Provider2URL       string        `env:"PROVIDER2_URL" envDefault:"https://raw.githubusercontent.com/WEG-Technology/mock/refs/heads/main/v2/provider2"`
 	ProviderTimeout    time.Duration `env:"PROVIDER_TIMEOUT" envDefault:"5s"`
 	ProviderRatePerSec float64       `env:"PROVIDER_RATE_PER_SEC" envDefault:"2"`
 	ProviderBurst      int           `env:"PROVIDER_BURST" envDefault:"1"`

@@ -44,6 +44,8 @@ func ErrorHandler(log *slog.Logger) fiber.ErrorHandler {
 			return Error(c, fiber.StatusBadRequest, "invalid_input", err.Error())
 		case errors.Is(err, domain.ErrNotFound):
 			return Error(c, fiber.StatusNotFound, "not_found", "resource not found")
+		case errors.Is(err, domain.ErrConflict):
+			return Error(c, fiber.StatusConflict, "conflict", err.Error())
 		case errors.Is(err, domain.ErrSyncInProgress):
 			return Error(c, fiber.StatusConflict, "sync_in_progress", err.Error())
 		case errors.As(err, &fe):

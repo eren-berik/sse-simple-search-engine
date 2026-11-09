@@ -3,6 +3,7 @@ package ingest
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -20,12 +21,23 @@ type Store interface {
 	LatestSyncRuns(ctx context.Context) ([]domain.SyncRun, error)
 }
 
+// ProviderSource lists the configured providers.
+type ProviderSource interface {
+	ListEnabled(ctx context.Context) ([]domain.Provider, error)
+	Get(ctx context.Context, id int64) (domain.Provider, error)
+}
+
+// Builder turns a provider configuration into a runnable provider.
+type Builder interface {
+	Build(cfg domain.Provider) (provider.Provider, error)
+}
+
 // Invalidator is notified when stored content changes so derived caches can be dropped.
 type Invalidator interface {
 	Invalidate(ctx context.Context) error
 }
 
-// Report summarizes a sync across all providers.
+// Report summarizes a sync.
 type Report struct {
 	StartedAt  time.Time        `json:"started_at"`
 	FinishedAt time.Time        `json:"finished_at"`
@@ -34,7 +46,8 @@ type Report struct {
 }
 
 type Service struct {
-	providers   []provider.Provider
+	source      ProviderSource
+	builder     Builder
 	store       Store
 	scorer      *scoring.Scorer
 	invalidator Invalidator
@@ -43,8 +56,8 @@ type Service struct {
 	running     sync.Mutex
 }
 
-func NewService(providers []provider.Provider, store Store, scorer *scoring.Scorer, inv Invalidator, log *slog.Logger) *Service {
-	return &Service{providers: providers, store: store, scorer: scorer, invalidator: inv, log: log, now: time.Now}
+func NewService(source ProviderSource, builder Builder, store Store, scorer *scoring.Scorer, inv Invalidator, log *slog.Logger) *Service {
+	return &Service{source: source, builder: builder, store: store, scorer: scorer, invalidator: inv, log: log, now: time.Now}
 }
 
 // Run syncs immediately and then on every interval until ctx is cancelled.
@@ -64,23 +77,48 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Sync fetches all providers concurrently and stores their content.
-// Providers are isolated: one failing does not prevent the others from being stored.
-// Only one sync runs at a time; a concurrent call returns domain.ErrSyncInProgress.
+// Sync fetches every enabled provider. Providers are read from storage on each run,
+// so providers added or changed at runtime are picked up without a restart.
 func (s *Service) Sync(ctx context.Context) (Report, error) {
 	if !s.running.TryLock() {
 		return Report{}, domain.ErrSyncInProgress
 	}
 	defer s.running.Unlock()
 
-	report := Report{StartedAt: s.now(), Runs: make([]domain.SyncRun, len(s.providers))}
+	configs, err := s.source.ListEnabled(ctx)
+	if err != nil {
+		return Report{}, fmt.Errorf("list providers: %w", err)
+	}
+	return s.sync(ctx, configs), nil
+}
+
+// SyncProvider fetches a single provider. Disabled providers are rejected.
+func (s *Service) SyncProvider(ctx context.Context, id int64) (Report, error) {
+	if !s.running.TryLock() {
+		return Report{}, domain.ErrSyncInProgress
+	}
+	defer s.running.Unlock()
+
+	cfg, err := s.source.Get(ctx, id)
+	if err != nil {
+		return Report{}, err
+	}
+	if !cfg.Enabled {
+		return Report{}, fmt.Errorf("%w: provider %q is disabled", domain.ErrInvalidInput, cfg.Name)
+	}
+	return s.sync(ctx, []domain.Provider{cfg}), nil
+}
+
+// sync fetches providers concurrently. One failing provider does not prevent the others from being stored.
+func (s *Service) sync(ctx context.Context, configs []domain.Provider) Report {
+	report := Report{StartedAt: s.now(), Runs: make([]domain.SyncRun, len(configs))}
 
 	var wg sync.WaitGroup
-	for i, p := range s.providers {
+	for i, cfg := range configs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			report.Runs[i] = s.syncProvider(ctx, p)
+			report.Runs[i] = s.syncProvider(ctx, cfg)
 		}()
 	}
 	wg.Wait()
@@ -97,15 +135,19 @@ func (s *Service) Sync(ctx context.Context) (Report, error) {
 	}
 
 	report.FinishedAt = s.now()
-	s.log.Info("sync finished", "duration", report.FinishedAt.Sub(report.StartedAt), "rescored", rescored)
-	return report, nil
+	s.log.Info("sync finished", "providers", len(configs), "duration", report.FinishedAt.Sub(report.StartedAt), "rescored", rescored)
+	return report
 }
 
-func (s *Service) syncProvider(ctx context.Context, p provider.Provider) domain.SyncRun {
-	run := domain.SyncRun{Provider: p.Name(), StartedAt: s.now(), Status: domain.SyncStatusSuccess}
-	log := s.log.With("provider", p.Name())
+func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.SyncRun {
+	run := domain.SyncRun{Provider: cfg.Name, StartedAt: s.now(), Status: domain.SyncStatusSuccess}
+	log := s.log.With("provider", cfg.Name)
 
-	contents, err := p.Fetch(ctx)
+	p, err := s.builder.Build(cfg)
+	var contents []domain.Content
+	if err == nil {
+		contents, err = p.Fetch(ctx)
+	}
 	if err == nil {
 		run.Fetched = len(contents)
 		scoredAt := s.now()
