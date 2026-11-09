@@ -59,9 +59,16 @@
     bad_gateway: "Servise şu anda ulaşılamıyor.",
     gateway_timeout: "Servis zamanında yanıt vermedi.",
     auth_unavailable: "Kimlik doğrulama şu anda kullanılamıyor.",
+    upstream_unavailable: "Servis geçici olarak devre dışı, kısa süre sonra tekrar deneyin.",
     format_not_detected: "Format algılanamadı: URL'den gelen veri desteklenen JSON veya XML şemasına uymuyor.",
     provider_unreachable: "Provider URL'sine ulaşılamadı; adresi kontrol edin.",
     conflict: "Bu isimde bir provider zaten var.",
+  };
+
+  // Rate limits and open circuits say when to come back (Retry-After, in seconds).
+  const retryMessages = {
+    rate_limited: (s) => `Çok fazla istek gönderildi, ${s} saniye sonra tekrar deneyin.`,
+    upstream_unavailable: (s) => `Servis geçici olarak devre dışı, ${s} saniye sonra tekrar deneyin.`,
   };
 
   class ApiError extends Error {
@@ -80,7 +87,10 @@
     const data = res.status === 204 ? null : await res.json().catch(() => null);
     if (!res.ok) {
       const code = data?.error?.code;
-      throw new ApiError(res.status, code, errorMessages[code] || data?.error?.message || `İstek başarısız (${res.status})`);
+      const retryAfter = Number.parseInt(res.headers.get("Retry-After"), 10);
+      const message = (retryAfter > 0 && retryMessages[code]?.(retryAfter))
+        || errorMessages[code] || data?.error?.message || `İstek başarısız (${res.status})`;
+      throw new ApiError(res.status, code, message);
     }
     return { data, headers: res.headers };
   }

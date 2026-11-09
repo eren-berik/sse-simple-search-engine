@@ -6,6 +6,7 @@ services:
     environment:
       IAM_URL: http://iam-service:8080
       SSE_URL: http://sse-service:8080
+      JWKS_URL: http://iam-service:8080/.well-known/jwks.json
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:

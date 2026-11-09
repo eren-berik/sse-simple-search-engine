@@ -28,7 +28,24 @@ info:
 
     recency: within 7 days +5, 30 days +3, 90 days +1, otherwise 0.
 
-    **Rate limits:** per client IP, 100 requests/min on `/api/*` and 10 requests/min on login, register and refresh.
+    **Edge checks:** the gateway verifies the access token and the role before forwarding, so a rejected
+    request never reaches a service; sse-service verifies the token again.
+
+    **Rate limits** (defaults; every response carries `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
+    `X-RateLimit-Reset` for the tightest limit that applied, a `429` also carries `Retry-After`):
+
+    | Tier | Key | Limit | Applies to |
+    |---|---|---|---|
+    | ip | client IP | 300/min | every `/api` request, before authentication |
+    | auth | client IP | 10/min | login, register, refresh |
+    | user | token subject | 100/min | every authenticated request |
+    | sync | token subject | 5/min | `POST /sync`, `POST /providers/{id}/sync` |
+
+    **Resilience:** each backing service has its own circuit breaker. After repeated failures
+    (connection errors, 502/503/504) its circuit opens and calls fail fast with
+    `503 upstream_unavailable` and `Retry-After` until a trial request succeeds. `GET` requests are
+    retried up to twice with exponential backoff and jitter after connection errors, 502 or 503;
+    writes and timeouts are never retried.
 servers:
   - url: http://localhost:8080
 tags:
@@ -150,6 +167,8 @@ paths:
                 properties:
                   data: { $ref: '#/components/schemas/User' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
 
   /api/v1/contents:
     get:
@@ -184,6 +203,8 @@ paths:
                   meta: { $ref: '#/components/schemas/ListMeta' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
 
   /api/v1/contents/{id}:
     get:
@@ -321,6 +342,7 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/SyncInProgress' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /api/v1/sync:
     post:
@@ -331,6 +353,8 @@ paths:
         '200': { $ref: '#/components/responses/SyncReport' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/SyncInProgress' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '503': { $ref: '#/components/responses/Unavailable' }
 
   /api/v1/sync/runs:
     get:
@@ -361,7 +385,9 @@ paths:
     get:
       tags: [health]
       summary: Gateway readiness
-      description: Fails when iam-service or sse-service is unreachable; a Redis outage only reports `degraded`.
+      description: |
+        Fails when iam-service or sse-service is unreachable. A Redis or JWKS outage and open circuits
+        (`circuit:<service>`) only report `degraded`.
       security: []
       responses:
         '200': { description: Ready (ok or degraded) }
@@ -521,6 +547,20 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     RateLimited:
       description: Too many requests (`rate_limited`)
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until the window resets }
+        X-RateLimit-Limit: { schema: { type: integer } }
+        X-RateLimit-Remaining: { schema: { type: integer } }
+        X-RateLimit-Reset: { schema: { type: integer }, description: Seconds until the window resets }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unavailable:
+      description: |
+        A backing service is unavailable: its circuit is open (`upstream_unavailable`, with `Retry-After`)
+        or the signing keys cannot be loaded (`auth_unavailable`).
+      headers:
+        Retry-After: { schema: { type: integer }, description: Seconds until the circuit allows a trial request }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }

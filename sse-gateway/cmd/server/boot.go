@@ -12,8 +12,10 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/config"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/middleware"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
 )
 
 // application holds the wired components and the resources that must be released on shutdown.
@@ -45,22 +47,46 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		"iam-service": upstreamCheck(client, cfg.IAMURL),
 		"sse-service": upstreamCheck(client, cfg.SSEURL),
 	}
-	var optional map[string]httpx.Check
+	// Already fetched signing keys keep verifying tokens while the key set is unreachable.
+	keys := jwtauth.NewRemoteKeySource(cfg.JWKSURL, 5*time.Second)
+	resilience := middleware.ResilienceConfig{
+		FailureThreshold: cfg.BreakerFailureThreshold,
+		OpenTimeout:      cfg.BreakerOpenTimeout,
+		HalfOpenRequests: cfg.BreakerHalfOpenRequests,
+		MaxRetries:       cfg.UpstreamMaxRetries,
+		BaseBackoff:      cfg.UpstreamBaseBackoff,
+		MaxBackoff:       cfg.UpstreamMaxBackoff,
+	}
+	iamGuard := middleware.NewResilience("iam-service", resilience, log)
+	sseGuard := middleware.NewResilience("sse-service", resilience, log)
+
+	// An open circuit is reported but does not fail readiness: the liveness checks above decide.
+	optional := map[string]httpx.Check{
+		"jwks":                keys.Ping,
+		"circuit:iam-service": iamGuard.Check,
+		"circuit:sse-service": sseGuard.Check,
+	}
 	if app.redis != nil {
-		optional = map[string]httpx.Check{"redis": func(ctx context.Context) error { return app.redis.Ping(ctx).Err() }}
+		optional["redis"] = func(ctx context.Context) error { return app.redis.Ping(ctx).Err() }
 	}
 
 	app.http = router.New(router.Deps{
-		IAMURL:              cfg.IAMURL,
-		SSEURL:              cfg.SSEURL,
-		UpstreamTimeout:     cfg.UpstreamTimeout,
-		Ready:               httpx.Ready(required, optional),
-		Log:                 log,
-		RateLimitMax:        cfg.RateLimitMax,
-		RateLimitWindow:     cfg.RateLimitWindow,
-		AuthRateLimitMax:    cfg.AuthRateLimitMax,
-		AuthRateLimitWindow: cfg.AuthRateLimitWindow,
-		Redis:               app.redis,
+		IAMURL:          cfg.IAMURL,
+		SSEURL:          cfg.SSEURL,
+		UpstreamTimeout: cfg.UpstreamTimeout,
+		IAMGuard:        iamGuard.Guard,
+		SSEGuard:        sseGuard.Guard,
+		Ready:           httpx.Ready(required, optional),
+		Log:             log,
+		Verifier:        jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
+		RateLimits: middleware.RateLimits{
+			IP:    middleware.Limit{Max: cfg.IPRateLimitMax, Window: cfg.IPRateLimitWindow},
+			Auth:  middleware.Limit{Max: cfg.AuthRateLimitMax, Window: cfg.AuthRateLimitWindow},
+			User:  middleware.Limit{Max: cfg.UserRateLimitMax, Window: cfg.UserRateLimitWindow},
+			Sync:  middleware.Limit{Max: cfg.SyncRateLimitMax, Window: cfg.SyncRateLimitWindow},
+			Redis: app.redis,
+			Log:   log,
+		},
 	})
 	return app, nil
 }
