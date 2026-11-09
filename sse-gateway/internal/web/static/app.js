@@ -415,6 +415,26 @@
     }
   }
 
+  // Lucide icons (ISC licence), inlined so the dashboard stays dependency-free.
+  const icons = {
+    sync: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+    disable: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+    enable: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+    delete: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  };
+
+  // iconButton builds a compact action button; the label doubles as tooltip and accessible name.
+  function iconButton(icon, label, extraClass = "") {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `secondary icon-btn ${extraClass}`.trim();
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[icon]}</svg>`;
+    return button;
+  }
+
   function renderProviders(providers, lastRun) {
     const rows = $("provider-rows");
     rows.replaceChildren();
@@ -430,32 +450,22 @@
       const runCell = cell(runText, "hide-sm");
       if (run?.error) runCell.title = run.error;
 
-      const actions = document.createElement("td");
+      const actionsCell = document.createElement("td");
+      const actions = document.createElement("div");
       actions.className = "actions";
-      const syncBtn = document.createElement("button");
-      syncBtn.type = "button";
-      syncBtn.className = "secondary small";
-      syncBtn.textContent = "Senkronize et";
+      actionsCell.append(actions);
+      const syncBtn = iconButton("sync", "Senkronize et");
       syncBtn.disabled = !p.enabled;
       syncBtn.addEventListener("click", () => runSync(`/api/v1/providers/${p.id}/sync`, syncBtn));
-      const editBtn = document.createElement("button");
-      editBtn.type = "button";
-      editBtn.className = "secondary small";
-      editBtn.textContent = "Düzenle";
+      const editBtn = iconButton("edit", "Düzenle");
       editBtn.addEventListener("click", () => openProviderEdit(p));
-      const toggleBtn = document.createElement("button");
-      toggleBtn.type = "button";
-      toggleBtn.className = "secondary small";
-      toggleBtn.textContent = p.enabled ? "Devre dışı bırak" : "Etkinleştir";
+      const toggleBtn = p.enabled ? iconButton("disable", "Devre dışı bırak") : iconButton("enable", "Etkinleştir");
       toggleBtn.addEventListener("click", () => toggleProvider(p, toggleBtn));
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "secondary small danger";
-      deleteBtn.textContent = "Sil";
+      const deleteBtn = iconButton("delete", "Sil", "danger");
       deleteBtn.addEventListener("click", () => deleteProvider(p, deleteBtn));
       actions.append(syncBtn, editBtn, toggleBtn, deleteBtn);
 
-      tr.append(cell(p.name), cell(p.format.toUpperCase()), cell(p.url, "hide-sm url"), status, runCell, actions);
+      tr.append(cell(p.name), cell(p.format.toUpperCase(), "hide-sm"), cell(p.url, "hide-sm url"), status, runCell, actionsCell);
       rows.append(tr);
     }
   }
@@ -463,6 +473,7 @@
   async function runSync(path, button) {
     const epoch = authEpoch;
     button.disabled = true;
+    button.classList.add("busy");
     try {
       const { data } = await api(path, { method: "POST" });
       if (isStale(epoch)) return;
@@ -476,6 +487,7 @@
       if (!isStale(epoch)) showError($("error"), err.message);
     } finally {
       button.disabled = false;
+      button.classList.remove("busy");
     }
   }
 
