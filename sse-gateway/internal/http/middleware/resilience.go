@@ -35,8 +35,8 @@ type ResilienceConfig struct {
 //
 // Retries wrap the breaker, so every attempt is counted and an open circuit stops retrying
 // at once. Only idempotent requests (GET, HEAD) are retried, and only after failures that
-// are likely transient and fast: connection errors, 502 and 503. A timeout is not retried,
-// since it already used the whole time budget. Writes such as login or sync are never
+// are likely transient and fast: connection errors, 502 and 503. Timeouts (also while
+// connecting) are not retried, since they already used the whole time budget. Writes such as login or sync are never
 // retried: the first attempt may have reached the service even though the response was lost.
 type Resilience struct {
 	name    string
@@ -137,7 +137,13 @@ func retryable(err error) bool {
 		return int(status) != fiber.StatusGatewayTimeout
 	}
 	var callErr *proxy.CallError
-	return errors.As(err, &callErr) && !errors.Is(err, fasthttp.ErrTimeout)
+	return errors.As(err, &callErr) && !isTimeout(err)
+}
+
+// isTimeout reports a call that used up its time budget, while connecting or waiting for the
+// response; retrying it would multiply the client's wait.
+func isTimeout(err error) bool {
+	return errors.Is(err, fasthttp.ErrTimeout) || errors.Is(err, fasthttp.ErrDialTimeout)
 }
 
 // finalError hands an upstream's own 5xx answer back to the client unchanged.

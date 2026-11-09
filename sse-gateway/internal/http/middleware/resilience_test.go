@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/valyala/fasthttp"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/proxy"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
@@ -180,4 +182,13 @@ func TestBackoffIsCappedWithJitter(t *testing.T) {
 			assert.Less(t, d, ceiling, "attempt %d", attempt)
 		}
 	}
+}
+
+func TestRetryable(t *testing.T) {
+	assert.True(t, retryable(&proxy.CallError{Err: errors.New("connection refused")}))
+	assert.True(t, retryable(unavailableStatus(http.StatusServiceUnavailable)))
+	assert.False(t, retryable(&proxy.CallError{Err: fasthttp.ErrTimeout}))
+	assert.False(t, retryable(&proxy.CallError{Err: fasthttp.ErrDialTimeout}), "a dial timeout used the time budget too")
+	assert.False(t, retryable(unavailableStatus(http.StatusGatewayTimeout)))
+	assert.False(t, retryable(ErrCircuitOpen))
 }

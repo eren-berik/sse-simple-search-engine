@@ -74,6 +74,8 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		IAMURL:          cfg.IAMURL,
 		SSEURL:          cfg.SSEURL,
 		UpstreamTimeout: cfg.UpstreamTimeout,
+		IAMGuard:        iamGuard.Guard,
+		SSEGuard:        sseGuard.Guard,
 		Ready:           httpx.Ready(required, optional),
 		Log:             log,
 		Verifier:        jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
