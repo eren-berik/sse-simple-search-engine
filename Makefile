@@ -1,4 +1,4 @@
-.PHONY: up down logs deps test test-integration lint fmt tidy
+.PHONY: up down logs deps keys test test-integration lint fmt tidy
 
 MODULES := iam-service sse-gateway sse-service
 
@@ -20,6 +20,13 @@ logs:
 ## deps: start only PostgreSQL and Redis
 deps:
 	docker compose up -d --wait postgres redis
+
+## keys: generate a persistent RSA key for signing access tokens (see .env.example)
+keys:
+	@mkdir -p deploy/keys
+	@test -f deploy/keys/jwt.pem || openssl genrsa -out deploy/keys/jwt.pem 2048
+	@chmod 644 deploy/keys/jwt.pem
+	@echo "Set JWT_PRIVATE_KEY_FILE=/keys/jwt.pem in .env and run make up"
 
 ## test: unit tests of every module
 test:
