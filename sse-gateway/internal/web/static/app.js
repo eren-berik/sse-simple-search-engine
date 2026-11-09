@@ -161,9 +161,34 @@
     loadContents();
   }
 
+  // authEpoch changes whenever the signed-in user changes; responses of requests started under
+  // an older epoch are dropped so one user's data never renders in another user's session.
+  let authEpoch = 0;
+  const isStale = (epoch) => epoch !== authEpoch;
+
   function signOut(message) {
+    authEpoch++;
     clearSession();
+    resetAppView();
     showAuth(message);
+  }
+
+  // resetAppView clears everything the previous user typed or loaded.
+  function resetAppView() {
+    clearTimeout(debounce);
+    $("filters").reset();
+    $("provider").replaceChildren(new Option("Tümü", ""));
+    state.page = 1;
+    state.totalPages = 0;
+    $("rows").replaceChildren();
+    $("page-info").textContent = "";
+    $("relevance-col").hidden = true;
+    $("sort-hint").hidden = true;
+    $("provider-rows").replaceChildren();
+    $("provider-form").reset();
+    if ($("detail").open) $("detail").close();
+    $("toast").hidden = true;
+    showError($("error"), "");
   }
 
   // ---------------------------------------------------------------- auth forms
@@ -274,6 +299,7 @@
   }
 
   async function loadContents() {
+    const epoch = authEpoch;
     const params = new URLSearchParams();
     for (const key of ["q", "type", "provider", "sort", "per_page"]) {
       const value = $(key).value.trim();
@@ -283,16 +309,19 @@
 
     try {
       const { data } = await api(`/api/v1/contents?${params}`);
+      if (isStale(epoch)) return;
       showError($("error"), "");
       renderContents(data.data, data.meta);
     } catch (err) {
-      if (session) showError($("error"), err.message);
+      if (!isStale(epoch)) showError($("error"), err.message);
     }
   }
 
   async function loadProviderOptions() {
+    const epoch = authEpoch;
     try {
       const { data } = await api("/api/v1/providers");
+      if (isStale(epoch)) return;
       const select = $("provider");
       const current = select.value;
       select.replaceChildren(new Option("Tümü", ""));
@@ -305,8 +334,10 @@
   }
 
   async function openDetail(id) {
+    const epoch = authEpoch;
     try {
       const { data } = await api(`/api/v1/contents/${id}`);
+      if (isStale(epoch)) return;
       const c = data.data;
       const b = c.score_breakdown;
       $("detail-title").textContent = c.title;
@@ -332,7 +363,7 @@
       }
       $("detail").showModal();
     } catch (err) {
-      showError($("error"), err.message);
+      if (!isStale(epoch)) showError($("error"), err.message);
     }
   }
 
@@ -350,15 +381,17 @@
 
   // ---------------------------------------------------------------- providers (admin)
   async function loadProviders() {
+    const epoch = authEpoch;
     try {
       const [{ data: providers }, { data: runs }] = await Promise.all([
         api("/api/v1/providers"),
         api("/api/v1/sync/runs"),
       ]);
+      if (isStale(epoch)) return;
       const lastRun = Object.fromEntries(runs.data.map((r) => [r.provider, r]));
       renderProviders(providers.data, lastRun);
     } catch (err) {
-      showError($("error"), err.message);
+      if (!isStale(epoch)) showError($("error"), err.message);
     }
   }
 
@@ -398,9 +431,11 @@
   }
 
   async function runSync(path, button) {
+    const epoch = authEpoch;
     button.disabled = true;
     try {
       const { data } = await api(path, { method: "POST" });
+      if (isStale(epoch)) return;
       const failed = data.data.runs.filter((r) => r.status !== "success");
       toast(failed.length
         ? `Senkronizasyon tamamlandı, ${failed.length} provider başarısız oldu.`
@@ -408,16 +443,18 @@
       await loadProviders();
       loadContents();
     } catch (err) {
-      showError($("error"), err.message);
+      if (!isStale(epoch)) showError($("error"), err.message);
     } finally {
       button.disabled = false;
     }
   }
 
   async function toggleProvider(p, button) {
+    const epoch = authEpoch;
     button.disabled = true;
     try {
       await api(`/api/v1/providers/${p.id}`, { method: "PATCH", body: { enabled: !p.enabled } });
+      if (isStale(epoch)) return;
       toast(p.enabled
         ? `"${p.name}" devre dışı bırakıldı; içerikleri aramada gösterilmeyecek.`
         : `"${p.name}" etkinleştirildi.`);
@@ -425,6 +462,7 @@
       await loadProviderOptions();
       loadContents();
     } catch (err) {
+      if (isStale(epoch)) return;
       showError($("error"), err.message);
       button.disabled = false;
     }
@@ -434,6 +472,7 @@
 
   $("provider-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+    const epoch = authEpoch;
     const form = e.target;
     const f = new FormData(form);
     const button = form.querySelector("button[type=submit]");
@@ -443,12 +482,13 @@
         method: "POST",
         body: { name: f.get("name"), url: f.get("url"), format: f.get("format"), enabled: f.get("enabled") === "on" },
       });
+      if (isStale(epoch)) return;
       form.reset();
       toast(`"${data.data.name}" eklendi. İçerikleri için senkronize edin.`);
       await loadProviders();
       loadProviderOptions();
     } catch (err) {
-      showError($("error"), err.message);
+      if (!isStale(epoch)) showError($("error"), err.message);
     } finally {
       button.disabled = false;
     }
