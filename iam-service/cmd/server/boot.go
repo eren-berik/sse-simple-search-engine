@@ -16,18 +16,21 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/internal/http/handler"
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/internal/repository/postgres"
+	"github.com/eren-berik/sse-simple-search-engine/iam-service/internal/telemetry"
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/pkg/jwtauth"
+	"github.com/eren-berik/sse-simple-search-engine/iam-service/pkg/metrics"
 )
 
 var _ auth.Store = (*postgres.Store)(nil)
 
 // application holds the wired components and the resources that must be released on shutdown.
 type application struct {
-	cfg  config.Config
-	log  *slog.Logger
-	pool *pgxpool.Pool
-	http *fiber.App
+	cfg     config.Config
+	log     *slog.Logger
+	pool    *pgxpool.Pool
+	http    *fiber.App
+	metrics *metrics.Server
 }
 
 // boot connects to the database, loads the signing key and wires every component together.
@@ -58,12 +61,16 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		return nil, err
 	}
 
+	reg := metrics.NewRegistry()
+	app.metrics = metrics.NewServer(cfg.MetricsAddr, reg, log)
+
 	app.http = router.New(router.Deps{
-		Auth:     handler.NewAuthHandler(authSvc),
-		Signer:   signer,
-		Verifier: verifier,
-		Ready:    httpx.Ready(map[string]httpx.Check{"database": pool.Ping}, nil),
-		Log:      log,
+		Auth:       handler.NewAuthHandler(telemetry.InstrumentAuthenticator(reg, authSvc)),
+		Signer:     signer,
+		Verifier:   verifier,
+		Ready:      httpx.Ready(map[string]httpx.Check{"database": pool.Ping}, nil),
+		Log:        log,
+		Instrument: metrics.HTTP(reg),
 	})
 	return app, nil
 }

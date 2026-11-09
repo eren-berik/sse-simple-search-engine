@@ -17,6 +17,8 @@ type Deps struct {
 	Verifier *jwtauth.Verifier
 	Ready    fiber.Handler
 	Log      *slog.Logger
+	// Instrument records request metrics; optional.
+	Instrument fiber.Handler
 }
 
 func New(d Deps) *fiber.App {
@@ -25,6 +27,7 @@ func New(d Deps) *fiber.App {
 		Log:               d.Log,
 		ErrorMappers:      []httpx.ErrorMapper{handler.ErrorMapper},
 		TrustProxyHeaders: true, // only reachable through the gateway
+		Instrument:        d.Instrument,
 	})
 
 	app.Get("/healthz", httpx.Live)

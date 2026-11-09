@@ -15,6 +15,8 @@ func (a *application) serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	go a.metrics.Run(ctx)
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
