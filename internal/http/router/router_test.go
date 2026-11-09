@@ -234,3 +234,15 @@ func TestReadiness(t *testing.T) {
 	resp, _ = get(t, newApp(t, testDeps{db: fakePinger{err: errors.New("down")}}), "/readyz")
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
+
+func TestServesDashboard(t *testing.T) {
+	app := newApp(t, testDeps{})
+
+	resp, _ := get(t, app, "/")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, resp.Header.Get("Content-Type"), "text/html")
+
+	resp, body := get(t, app, "/does-not-exist")
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Equal(t, "not_found", errorCode(body))
+}
