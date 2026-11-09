@@ -82,7 +82,7 @@ func (r *Registry) Detect(ctx context.Context, url string) (domain.ProviderForma
 	cfg.MaxRetries = 0 // an admin is waiting for the answer
 	body, err := httpclient.New(cfg).Get(ctx, url)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", domain.ErrProviderUnreachable, err)
+		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnreachable, err)
 	}
 
 	for _, format := range r.candidates(body) {
