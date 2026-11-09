@@ -12,6 +12,8 @@ import (
 type Config struct {
 	HTTPAddr string     `env:"HTTP_ADDR" envDefault:":8080"`
 	LogLevel slog.Level `env:"LOG_LEVEL" envDefault:"info"`
+	// MetricsAddr serves Prometheus metrics on a separate, unpublished port.
+	MetricsAddr string `env:"METRICS_ADDR" envDefault:":9100"`
 
 	DatabaseURL string `env:"DATABASE_URL,required"`
 	// RedisURL is optional; without it an in-process cache is used.

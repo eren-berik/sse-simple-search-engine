@@ -18,6 +18,8 @@ type Deps struct {
 	Verifier  *jwtauth.Verifier
 	Ready     fiber.Handler
 	Log       *slog.Logger
+	// Instrument records request metrics; optional.
+	Instrument fiber.Handler
 }
 
 // New builds the API. Every /api/v1 route requires a valid access token; viewers can read
@@ -29,6 +31,7 @@ func New(d Deps) *fiber.App {
 		Log:               d.Log,
 		ErrorMappers:      []httpx.ErrorMapper{handler.ErrorMapper},
 		TrustProxyHeaders: true, // only reachable through the gateway
+		Instrument:        d.Instrument,
 	})
 
 	app.Get("/healthz", httpx.Live)

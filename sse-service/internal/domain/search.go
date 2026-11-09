@@ -105,3 +105,10 @@ func (r SearchResult) TotalPages() int {
 	}
 	return (r.Total + r.PerPage - 1) / r.PerPage
 }
+
+// ContentCount is the number of stored items of one type from one provider.
+type ContentCount struct {
+	Provider string
+	Type     ContentType
+	Count    int64
+}

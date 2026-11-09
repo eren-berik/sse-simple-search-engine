@@ -193,6 +193,23 @@ func (r *ContentRepository) RecordSyncRun(ctx context.Context, run domain.SyncRu
 	return nil
 }
 
+// CountContents returns how many items are stored per provider and type.
+func (r *ContentRepository) CountContents(ctx context.Context) ([]domain.ContentCount, error) {
+	rows, err := r.pool.Query(ctx, `SELECT provider, type, count(*) FROM contents GROUP BY provider, type`)
+	if err != nil {
+		return nil, fmt.Errorf("count contents: %w", err)
+	}
+	counts, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.ContentCount, error) {
+		var c domain.ContentCount
+		err := row.Scan(&c.Provider, &c.Type, &c.Count)
+		return c, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("count contents: %w", err)
+	}
+	return counts, nil
+}
+
 // LatestSyncRuns returns the most recent sync run of each provider.
 func (r *ContentRepository) LatestSyncRuns(ctx context.Context) ([]domain.SyncRun, error) {
 	rows, err := r.pool.Query(ctx, `
