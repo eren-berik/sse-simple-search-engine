@@ -34,6 +34,15 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	return m
 }
 
+// Series are created at zero when a limit or upstream is set up: a counter that first appears
+// with value 1 looks like no increase at all to increase() and rate().
+
+func (m *Metrics) initTier(tier string) {
+	if m != nil {
+		m.rateLimited.WithLabelValues(tier)
+	}
+}
+
 func (m *Metrics) rateLimit(tier string) {
 	if m != nil {
 		m.rateLimited.WithLabelValues(tier).Inc()
@@ -57,6 +66,8 @@ func (m *Metrics) watchCircuit(upstream string, cb *gobreaker.CircuitBreaker[str
 	if m == nil {
 		return
 	}
+	m.retries.WithLabelValues(upstream)
+	m.circuitRejected.WithLabelValues(upstream)
 	m.reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name:        "gateway_circuit_state",
 		Help:        "Circuit breaker state per upstream: 0 closed, 1 half-open, 2 open.",

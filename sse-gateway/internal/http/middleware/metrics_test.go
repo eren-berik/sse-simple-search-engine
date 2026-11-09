@@ -44,6 +44,7 @@ func TestMetricsCountRateLimitsByTier(t *testing.T) {
 	limits := RateLimits{Metrics: m, Log: discard}
 	app := fiber.New()
 	app.Get("/", limits.PerIP("auth", Limit{Max: 1, Window: time.Minute}), func(c *fiber.Ctx) error { return c.SendString("ok") })
+	assert.Equal(t, 1, testutil.CollectAndCount(m.rateLimited), "the tier's series exists at zero before any rejection")
 
 	for range 3 {
 		resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil), -1)
