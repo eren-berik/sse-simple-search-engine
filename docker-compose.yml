@@ -35,6 +35,8 @@ services:
       DATABASE_URL: postgres://app:app@postgres:5432/iam?sslmode=disable
       JWT_PRIVATE_KEY_FILE: ${JWT_PRIVATE_KEY_FILE:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./deploy/keys:/keys:ro
     depends_on:
       postgres:
         condition: service_healthy
