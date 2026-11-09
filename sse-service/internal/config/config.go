@@ -23,16 +23,15 @@ type Config struct {
 	ProviderBurst      int           `env:"PROVIDER_BURST" envDefault:"1"`
 	ProviderMaxRetries int           `env:"PROVIDER_MAX_RETRIES" envDefault:"3"`
 
+	// JWKSURL is the identity service's public key set used to verify access tokens.
+	JWKSURL     string `env:"JWKS_URL,required"`
+	JWTIssuer   string `env:"JWT_ISSUER" envDefault:"iam-service"`
+	JWTAudience string `env:"JWT_AUDIENCE" envDefault:"sse"`
+
 	SyncInterval time.Duration `env:"SYNC_INTERVAL" envDefault:"10m"`
 
 	VideoCoefficient float64 `env:"SCORE_VIDEO_COEFFICIENT" envDefault:"1.5"`
 	TextCoefficient  float64 `env:"SCORE_TEXT_COEFFICIENT" envDefault:"1.0"`
-
-	RateLimitMax    int           `env:"RATE_LIMIT_MAX" envDefault:"100"`
-	RateLimitWindow time.Duration `env:"RATE_LIMIT_WINDOW" envDefault:"1m"`
-
-	// AdminAPIKey protects admin endpoints; when empty they are disabled.
-	AdminAPIKey string `env:"ADMIN_API_KEY"`
 }
 
 func Load() (Config, error) {

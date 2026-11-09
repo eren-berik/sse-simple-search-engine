@@ -6,8 +6,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/response"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/ingest"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
 )
 
 // Syncer is the ingestion use case consumed by SyncHandler.
@@ -31,7 +31,7 @@ func (h *SyncHandler) Trigger(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return response.OK(c, report, nil)
+	return httpx.OK(c, report, nil)
 }
 
 // TriggerProvider handles POST /api/v1/providers/:id/sync.
@@ -44,7 +44,7 @@ func (h *SyncHandler) TriggerProvider(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return response.OK(c, report, nil)
+	return httpx.OK(c, report, nil)
 }
 
 // Status handles GET /api/v1/sync/runs.
@@ -56,5 +56,5 @@ func (h *SyncHandler) Status(c *fiber.Ctx) error {
 	if runs == nil {
 		runs = []domain.SyncRun{}
 	}
-	return response.OK(c, runs, nil)
+	return httpx.OK(c, runs, nil)
 }

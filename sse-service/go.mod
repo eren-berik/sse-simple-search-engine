@@ -12,7 +12,10 @@ require (
 	golang.org/x/sync v0.25.0
 )
 
-require golang.org/x/time v0.16.0
+require (
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	golang.org/x/time v0.16.0
+)
 
 require (
 	github.com/andybalholm/brotli v1.2.6 // indirect
@@ -26,10 +29,8 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
-	github.com/philhofer/fwd v1.1.3-0.20240916144458-20a13a1f6b7c // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/sethvargo/go-retry v0.5.0 // indirect
-	github.com/tinylib/msgp v1.2.5 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.51.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
