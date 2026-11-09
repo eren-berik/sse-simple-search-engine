@@ -137,6 +137,8 @@
     $("app-view").hidden = true;
     $("user-box").hidden = true;
     $("auth-view").hidden = false;
+    // Always come back to the login form, e.g. after registering and then logging out.
+    switchAuthTab("login");
     showError($("auth-error"), message);
   }
 
@@ -165,14 +167,16 @@
   }
 
   // ---------------------------------------------------------------- auth forms
+  function switchAuthTab(name) {
+    const tab = document.querySelector(`[data-auth-tab="${name}"]`);
+    selectTab(tab.parentElement, tab);
+    $("login-form").hidden = name !== "login";
+    $("register-form").hidden = name !== "register";
+    showError($("auth-error"), "");
+  }
+
   for (const tab of document.querySelectorAll("[data-auth-tab]")) {
-    tab.addEventListener("click", () => {
-      const isLogin = tab.dataset.authTab === "login";
-      selectTab(tab.parentElement, tab);
-      $("login-form").hidden = !isLogin;
-      $("register-form").hidden = isLogin;
-      showError($("auth-error"), "");
-    });
+    tab.addEventListener("click", () => switchAuthTab(tab.dataset.authTab));
   }
 
   async function submitAuth(form, path, body) {
