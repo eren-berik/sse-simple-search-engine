@@ -49,7 +49,23 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	}
 	// Already fetched signing keys keep verifying tokens while the key set is unreachable.
 	keys := jwtauth.NewRemoteKeySource(cfg.JWKSURL, 5*time.Second)
-	optional := map[string]httpx.Check{"jwks": keys.Ping}
+	resilience := middleware.ResilienceConfig{
+		FailureThreshold: cfg.BreakerFailureThreshold,
+		OpenTimeout:      cfg.BreakerOpenTimeout,
+		HalfOpenRequests: cfg.BreakerHalfOpenRequests,
+		MaxRetries:       cfg.UpstreamMaxRetries,
+		BaseBackoff:      cfg.UpstreamBaseBackoff,
+		MaxBackoff:       cfg.UpstreamMaxBackoff,
+	}
+	iamGuard := middleware.NewResilience("iam-service", resilience, log)
+	sseGuard := middleware.NewResilience("sse-service", resilience, log)
+
+	// An open circuit is reported but does not fail readiness: the liveness checks above decide.
+	optional := map[string]httpx.Check{
+		"jwks":                keys.Ping,
+		"circuit:iam-service": iamGuard.Check,
+		"circuit:sse-service": sseGuard.Check,
+	}
 	if app.redis != nil {
 		optional["redis"] = func(ctx context.Context) error { return app.redis.Ping(ctx).Err() }
 	}
