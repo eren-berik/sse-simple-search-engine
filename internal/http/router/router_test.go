@@ -235,12 +235,15 @@ func TestReadiness(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
 
-func TestServesDashboard(t *testing.T) {
+func TestServesDashboardAndSpec(t *testing.T) {
 	app := newApp(t, testDeps{})
 
 	resp, _ := get(t, app, "/")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, resp.Header.Get("Content-Type"), "text/html")
+
+	resp, _ = get(t, app, "/openapi.yaml")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	resp, body := get(t, app, "/does-not-exist")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)

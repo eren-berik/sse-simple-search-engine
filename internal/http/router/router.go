@@ -16,6 +16,7 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/internal/http/middleware"
 	"github.com/eren-berik/sse-simple-search-engine/internal/http/response"
 	"github.com/eren-berik/sse-simple-search-engine/internal/web"
+	"github.com/eren-berik/sse-simple-search-engine/openapi"
 )
 
 type Deps struct {
@@ -56,6 +57,11 @@ func New(d Deps) *fiber.App {
 	v1.Get("/sync/runs", d.Sync.Status)
 	v1.Post("/admin/sync", middleware.APIKey(d.AdminAPIKey), d.Sync.Trigger)
 
+	app.Get("/openapi.yaml", func(c *fiber.Ctx) error {
+		c.Type("yaml")
+		return c.Send(openapi.Spec)
+	})
+	app.Get("/docs", func(c *fiber.Ctx) error { return c.Redirect("/docs.html") })
 	app.Use("/", filesystem.New(filesystem.Config{
 		Root:   http.FS(web.Static),
 		Index:  "index.html",
