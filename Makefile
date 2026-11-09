@@ -1,6 +1,6 @@
 .PHONY: up down logs deps test test-integration lint fmt tidy
 
-MODULES := iam-service sse-service
+MODULES := iam-service sse-gateway sse-service
 
 TEST_DATABASE_URL ?= postgres://app:app@localhost:5433/contents?sslmode=disable
 TEST_REDIS_URL    ?= redis://localhost:6379/15

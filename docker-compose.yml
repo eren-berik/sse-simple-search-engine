@@ -1,8 +1,21 @@
 services:
-  sse-service:
-    build: ./sse-service
+  sse-gateway:
+    build: ./sse-gateway
     ports:
       - "${APP_PORT:-8080}:8080"
+    environment:
+      IAM_URL: http://iam-service:8080
+      SSE_URL: http://sse-service:8080
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The services below are only reachable through the gateway on the internal network.
+  sse-service:
+    build: ./sse-service
     environment:
       DATABASE_URL: postgres://app:app@postgres:5432/contents?sslmode=disable
       REDIS_URL: redis://redis:6379/0
