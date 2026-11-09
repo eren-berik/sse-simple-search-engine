@@ -13,6 +13,7 @@ import (
 // Syncer is the ingestion use case consumed by SyncHandler.
 type Syncer interface {
 	Sync(ctx context.Context) (ingest.Report, error)
+	SyncProvider(ctx context.Context, id int64) (ingest.Report, error)
 	Status(ctx context.Context) ([]domain.SyncRun, error)
 }
 
@@ -24,9 +25,22 @@ func NewSyncHandler(svc Syncer) *SyncHandler {
 	return &SyncHandler{svc: svc}
 }
 
-// Trigger handles POST /api/v1/admin/sync.
+// Trigger handles POST /api/v1/sync: syncs every enabled provider.
 func (h *SyncHandler) Trigger(c *fiber.Ctx) error {
 	report, err := h.svc.Sync(c.UserContext())
+	if err != nil {
+		return err
+	}
+	return response.OK(c, report, nil)
+}
+
+// TriggerProvider handles POST /api/v1/providers/:id/sync.
+func (h *SyncHandler) TriggerProvider(c *fiber.Ctx) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	report, err := h.svc.SyncProvider(c.UserContext(), id)
 	if err != nil {
 		return err
 	}

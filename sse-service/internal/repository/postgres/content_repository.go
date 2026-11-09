@@ -122,6 +122,10 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		args["type"] = string(q.Type)
 		conds = append(conds, `type = @type`)
 	}
+	if q.Provider != "" {
+		args["provider"] = q.Provider
+		conds = append(conds, `provider = @provider`)
+	}
 
 	where := ""
 	if len(conds) > 0 {

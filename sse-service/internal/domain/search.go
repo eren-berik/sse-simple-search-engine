@@ -24,9 +24,11 @@ const (
 type SearchQuery struct {
 	Keyword string
 	Type    ContentType // empty means all types
-	Sort    SortBy
-	Page    int
-	PerPage int
+	// Provider filters by provider name; empty means all providers.
+	Provider string
+	Sort     SortBy
+	Page     int
+	PerPage  int
 }
 
 // Normalize applies defaults and validates the query in place.
@@ -36,6 +38,8 @@ func (q *SearchQuery) Normalize() error {
 	if utf8.RuneCountInString(q.Keyword) > MaxKeywordLength {
 		return fmt.Errorf("%w: keyword must be at most %d characters", ErrInvalidInput, MaxKeywordLength)
 	}
+
+	q.Provider = strings.ToLower(strings.TrimSpace(q.Provider))
 
 	if q.Type != "" {
 		t, err := ParseContentType(string(q.Type))

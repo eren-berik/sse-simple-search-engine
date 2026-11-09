@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/handler"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/ingest"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/scoring"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/providers"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/search"
 )
 
@@ -54,8 +56,31 @@ func (f *fakeSearcher) Get(_ context.Context, id int64) (domain.Content, scoring
 type fakeSyncer struct{ err error }
 
 func (f fakeSyncer) Sync(context.Context) (ingest.Report, error) { return ingest.Report{}, f.err }
+func (f fakeSyncer) SyncProvider(context.Context, int64) (ingest.Report, error) {
+	return ingest.Report{}, f.err
+}
 func (f fakeSyncer) Status(context.Context) ([]domain.SyncRun, error) {
 	return nil, nil
+}
+
+type fakeProviders struct{}
+
+func (fakeProviders) List(context.Context) ([]domain.Provider, error) {
+	return []domain.Provider{{ID: 1, Name: "provider1", URL: "https://x.io", Format: domain.ProviderFormatJSON, Enabled: true}}, nil
+}
+
+func (fakeProviders) Create(_ context.Context, in providers.CreateInput) (domain.Provider, error) {
+	if in.Name == "provider1" {
+		return domain.Provider{}, domain.ErrConflict
+	}
+	return domain.Provider{ID: 2, Name: in.Name, URL: in.URL, Format: domain.ProviderFormat(in.Format), Enabled: true}, nil
+}
+
+func (fakeProviders) Update(_ context.Context, id int64, _ providers.UpdateInput) (domain.Provider, error) {
+	if id != 1 {
+		return domain.Provider{}, domain.ErrNotFound
+	}
+	return domain.Provider{ID: 1, Name: "provider1"}, nil
 }
 
 type fakePinger struct{ err error }
@@ -81,6 +106,7 @@ func newApp(t *testing.T, d testDeps) *fiber.App {
 	return New(Deps{
 		Contents:        handler.NewContentHandler(d.searcher),
 		Sync:            handler.NewSyncHandler(d.syncer),
+		Providers:       handler.NewProviderHandler(fakeProviders{}),
 		Health:          handler.NewHealthHandler(d.db, d.cache),
 		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
 		AdminAPIKey:     "secret",
@@ -186,11 +212,11 @@ func TestGetContent(t *testing.T) {
 func TestAdminSyncRequiresAPIKey(t *testing.T) {
 	app := newApp(t, testDeps{})
 
-	resp, body := do(t, app, httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync", nil))
+	resp, body := do(t, app, httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil))
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, "unauthorized", errorCode(body))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
 	req.Header.Set("X-API-Key", "secret")
 	resp, _ = do(t, app, req)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -199,7 +225,7 @@ func TestAdminSyncRequiresAPIKey(t *testing.T) {
 func TestAdminSyncConflict(t *testing.T) {
 	app := newApp(t, testDeps{syncer: fakeSyncer{err: domain.ErrSyncInProgress}})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
 	req.Header.Set("X-API-Key", "secret")
 	resp, body := do(t, app, req)
 
@@ -248,4 +274,48 @@ func TestServesDashboardAndSpec(t *testing.T) {
 	resp, body := get(t, app, "/does-not-exist")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Equal(t, "not_found", errorCode(body))
+}
+
+func adminRequest(method, url, body string) *http.Request {
+	req := httptest.NewRequest(method, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-Key", "secret")
+	return req
+}
+
+func TestProviders(t *testing.T) {
+	app := newApp(t, testDeps{})
+
+	resp, body := get(t, app, "/api/v1/providers")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Len(t, body["data"], 1)
+
+	resp, body = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers", `{"name":"feed","url":"https://x.io","format":"json"}`))
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.Equal(t, "feed", body["data"].(map[string]any)["name"])
+
+	resp, body = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers", `{"name":"provider1","url":"https://x.io","format":"json"}`))
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	assert.Equal(t, "conflict", errorCode(body))
+
+	resp, _ = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers", `not json`))
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	resp, _ = do(t, app, adminRequest(http.MethodPatch, "/api/v1/providers/1", `{"enabled":false}`))
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, _ = do(t, app, adminRequest(http.MethodPatch, "/api/v1/providers/9", `{"enabled":false}`))
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	resp, _ = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers/1/sync", ``))
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+func TestListPassesProviderFilter(t *testing.T) {
+	s := &fakeSearcher{}
+	app := newApp(t, testDeps{searcher: s})
+
+	resp, _ := get(t, app, "/api/v1/contents?provider=Provider2")
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "provider2", s.lastQuery.Provider)
 }

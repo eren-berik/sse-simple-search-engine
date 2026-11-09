@@ -20,10 +20,11 @@ import (
 )
 
 type Deps struct {
-	Contents *handler.ContentHandler
-	Sync     *handler.SyncHandler
-	Health   *handler.HealthHandler
-	Log      *slog.Logger
+	Contents  *handler.ContentHandler
+	Sync      *handler.SyncHandler
+	Providers *handler.ProviderHandler
+	Health    *handler.HealthHandler
+	Log       *slog.Logger
 
 	AdminAPIKey     string
 	RateLimitMax    int
@@ -54,8 +55,14 @@ func New(d Deps) *fiber.App {
 	v1 := app.Group("/api/v1", middleware.RateLimit(d.RateLimitMax, d.RateLimitWindow, d.Redis, d.Log))
 	v1.Get("/contents", d.Contents.List)
 	v1.Get("/contents/:id", d.Contents.Get)
+	v1.Get("/providers", d.Providers.List)
 	v1.Get("/sync/runs", d.Sync.Status)
-	v1.Post("/admin/sync", middleware.APIKey(d.AdminAPIKey), d.Sync.Trigger)
+
+	admin := middleware.APIKey(d.AdminAPIKey)
+	v1.Post("/providers", admin, d.Providers.Create)
+	v1.Patch("/providers/:id", admin, d.Providers.Update)
+	v1.Post("/providers/:id/sync", admin, d.Sync.TriggerProvider)
+	v1.Post("/sync", admin, d.Sync.Trigger)
 
 	app.Get("/openapi.yaml", func(c *fiber.Ctx) error {
 		c.Type("yaml")

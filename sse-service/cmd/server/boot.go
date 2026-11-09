@@ -14,11 +14,10 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/handler"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/ingest"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/provider"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/provider/jsonprovider"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/provider/xmlprovider"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/provider/registry"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/repository/postgres"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/scoring"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/providers"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/search"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/cache"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpclient"
@@ -51,14 +50,16 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	}
 	app.redis = rdb
 
-	repo := postgres.NewContentRepository(pool)
+	contentRepo := postgres.NewContentRepository(pool)
+	providerRepo := postgres.NewProviderRepository(pool)
 	scorer := newScorer(cfg)
-	searchSvc := search.NewService(repo, searchCache, cfg.CacheTTL, scorer, log)
-	app.ingest = ingest.NewService(buildProviders(cfg, log), repo, scorer, searchSvc, log)
+	searchSvc := search.NewService(contentRepo, searchCache, cfg.CacheTTL, scorer, log)
+	app.ingest = ingest.NewService(providerRepo, newProviderRegistry(cfg, log), contentRepo, scorer, searchSvc, log)
 
 	app.http = router.New(router.Deps{
 		Contents:        handler.NewContentHandler(searchSvc),
 		Sync:            handler.NewSyncHandler(app.ingest),
+		Providers:       handler.NewProviderHandler(providers.NewService(providerRepo)),
 		Health:          handler.NewHealthHandler(pool, searchCache),
 		Log:             log,
 		AdminAPIKey:     cfg.AdminAPIKey,
@@ -123,20 +124,13 @@ func newScorer(cfg config.Config) *scoring.Scorer {
 	return scoring.New(scoreCfg, time.Now)
 }
 
-// buildProviders lists the content providers. A new provider only needs an implementation
-// of provider.Provider and an entry here.
-func buildProviders(cfg config.Config, log *slog.Logger) []provider.Provider {
-	newClient := func() *httpclient.Client {
-		// Each provider gets its own client so rate limits are enforced per provider.
-		return httpclient.New(httpclient.Config{
-			Timeout:       cfg.ProviderTimeout,
-			RatePerSecond: cfg.ProviderRatePerSec,
-			Burst:         cfg.ProviderBurst,
-			MaxRetries:    cfg.ProviderMaxRetries,
-		})
-	}
-	return []provider.Provider{
-		jsonprovider.New("provider1", cfg.Provider1URL, newClient(), log),
-		xmlprovider.New("provider2", cfg.Provider2URL, newClient(), log),
-	}
+// newProviderRegistry builds providers from their stored configuration. Each provider gets its
+// own HTTP client so rate limits are enforced per provider.
+func newProviderRegistry(cfg config.Config, log *slog.Logger) *registry.Registry {
+	return registry.New(httpclient.Config{
+		Timeout:       cfg.ProviderTimeout,
+		RatePerSecond: cfg.ProviderRatePerSec,
+		Burst:         cfg.ProviderBurst,
+		MaxRetries:    cfg.ProviderMaxRetries,
+	}, log)
 }
