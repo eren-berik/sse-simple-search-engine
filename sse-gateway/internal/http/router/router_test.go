@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/middleware"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth/jwtauthtest"
@@ -48,21 +49,29 @@ func echoUpstream(t *testing.T, name string) string {
 }
 
 type options struct {
-	iam, sse  string
-	authLimit int
+	iam, sse                      string
+	ipLimit, authLimit, userLimit int
+	syncLimit                     int
 }
 
 func newApp(t *testing.T, o options) *fiber.App {
 	t.Helper()
-	if o.authLimit == 0 {
-		o.authLimit = 1000
+	orDefault := func(n int) int {
+		if n == 0 {
+			return 1000
+		}
+		return n
 	}
 	return New(Deps{
 		IAMURL: o.iam, SSEURL: o.sse, UpstreamTimeout: 2 * time.Second,
 		Ready: httpx.Ready(nil, nil), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		Verifier:     jwtauthtest.New(t).Verifier(),
-		RateLimitMax: 1000, RateLimitWindow: time.Minute,
-		AuthRateLimitMax: o.authLimit, AuthRateLimitWindow: time.Minute,
+		Verifier: jwtauthtest.New(t).Verifier(),
+		RateLimits: middleware.RateLimits{
+			IP:   middleware.Limit{Max: orDefault(o.ipLimit), Window: time.Minute},
+			Auth: middleware.Limit{Max: orDefault(o.authLimit), Window: time.Minute},
+			User: middleware.Limit{Max: orDefault(o.userLimit), Window: time.Minute},
+			Sync: middleware.Limit{Max: orDefault(o.syncLimit), Window: time.Minute},
+		},
 	})
 }
 
@@ -218,6 +227,57 @@ func TestAuthRateLimit(t *testing.T) {
 
 	resp, _, _ := send(t, app, withToken(t, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil), jwtauth.RoleViewer))
 	assert.Equal(t, http.StatusTeapot, resp.StatusCode, "other endpoints use the general limit")
+}
+
+func TestUserRateLimit(t *testing.T) {
+	app := newApp(t, options{iam: echoUpstream(t, "iam"), sse: echoUpstream(t, "sse"), userLimit: 2})
+	iss := jwtauthtest.New(t)
+	alice, bob := iss.TokenFor(t, "alice", jwtauth.RoleViewer), iss.TokenFor(t, "bob", jwtauth.RoleViewer)
+	// A refreshed token is a different string for the same user.
+	aliceAgain := iss.TokenFor(t, "alice", jwtauth.RoleAdmin)
+
+	contents := func(token string) *http.Response {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, _, _ := send(t, app, req)
+		return resp
+	}
+	first := contents(alice)
+	assert.Equal(t, http.StatusTeapot, first.StatusCode)
+	assert.Equal(t, "2", first.Header.Get("X-RateLimit-Limit"), "the user limit is the tightest and is reported")
+	assert.Equal(t, "1", first.Header.Get("X-RateLimit-Remaining"))
+
+	assert.Equal(t, http.StatusTeapot, contents(alice).StatusCode)
+	limited := contents(aliceAgain)
+	assert.Equal(t, http.StatusTooManyRequests, limited.StatusCode, "the limit follows the user, not the token")
+	assert.NotEmpty(t, limited.Header.Get("Retry-After"))
+
+	assert.Equal(t, http.StatusTeapot, contents(bob).StatusCode, "users behind the same IP have separate quotas")
+}
+
+func TestSyncRateLimit(t *testing.T) {
+	app := newApp(t, options{iam: echoUpstream(t, "iam"), sse: echoUpstream(t, "sse"), syncLimit: 1})
+	sync := func(path string) int {
+		resp, _, _ := send(t, app, withToken(t, httptest.NewRequest(http.MethodPost, path, nil), jwtauth.RoleAdmin))
+		return resp.StatusCode
+	}
+
+	assert.Equal(t, http.StatusTeapot, sync("/api/v1/sync"))
+	assert.Equal(t, http.StatusTooManyRequests, sync("/api/v1/providers/1/sync"), "both triggers share the budget")
+
+	resp, _, _ := send(t, app, withToken(t, httptest.NewRequest(http.MethodGet, "/api/v1/sync/runs", nil), jwtauth.RoleAdmin))
+	assert.Equal(t, http.StatusTeapot, resp.StatusCode, "reading sync runs is not a trigger")
+}
+
+func TestIPRateLimitCoversAnonymousRequests(t *testing.T) {
+	app := newApp(t, options{iam: echoUpstream(t, "iam"), sse: echoUpstream(t, "sse"), ipLimit: 2})
+
+	statuses := make([]int, 3)
+	for i := range statuses {
+		resp, _, _ := send(t, app, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil))
+		statuses[i] = resp.StatusCode
+	}
+	assert.Equal(t, []int{http.StatusUnauthorized, http.StatusUnauthorized, http.StatusTooManyRequests}, statuses)
 }
 
 func TestServesDashboardAndDocs(t *testing.T) {

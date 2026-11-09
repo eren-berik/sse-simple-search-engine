@@ -25,10 +25,15 @@ type Config struct {
 	// RedisURL is optional; without it rate limit counters are kept per instance.
 	RedisURL string `env:"REDIS_URL"`
 
-	RateLimitMax        int           `env:"RATE_LIMIT_MAX" envDefault:"100"`
-	RateLimitWindow     time.Duration `env:"RATE_LIMIT_WINDOW" envDefault:"1m"`
+	// Rate limit tiers; see middleware.RateLimits.
+	IPRateLimitMax      int           `env:"IP_RATE_LIMIT_MAX" envDefault:"300"`
+	IPRateLimitWindow   time.Duration `env:"IP_RATE_LIMIT_WINDOW" envDefault:"1m"`
 	AuthRateLimitMax    int           `env:"AUTH_RATE_LIMIT_MAX" envDefault:"10"`
 	AuthRateLimitWindow time.Duration `env:"AUTH_RATE_LIMIT_WINDOW" envDefault:"1m"`
+	UserRateLimitMax    int           `env:"USER_RATE_LIMIT_MAX" envDefault:"100"`
+	UserRateLimitWindow time.Duration `env:"USER_RATE_LIMIT_WINDOW" envDefault:"1m"`
+	SyncRateLimitMax    int           `env:"SYNC_RATE_LIMIT_MAX" envDefault:"5"`
+	SyncRateLimitWindow time.Duration `env:"SYNC_RATE_LIMIT_WINDOW" envDefault:"1m"`
 }
 
 func Load() (Config, error) {
