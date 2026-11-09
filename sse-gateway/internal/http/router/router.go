@@ -8,7 +8,6 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/filesystem"
-	"github.com/redis/go-redis/v9"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/middleware"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/proxy"
@@ -16,7 +15,6 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/openapi"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
-	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/ratelimit"
 )
 
 type Deps struct {
@@ -28,12 +26,7 @@ type Deps struct {
 	// Verifier checks access tokens at the edge; services verify them again.
 	Verifier *jwtauth.Verifier
 
-	RateLimitMax        int
-	RateLimitWindow     time.Duration
-	AuthRateLimitMax    int
-	AuthRateLimitWindow time.Duration
-	// Redis is optional; when set, rate limit counters are shared across gateway instances.
-	Redis *redis.Client
+	RateLimits middleware.RateLimits
 }
 
 // New builds the gateway. It owns no business logic: API calls are forwarded to the service
@@ -45,29 +38,37 @@ func New(d Deps) *fiber.App {
 	app.Get("/healthz", httpx.Live)
 	app.Get("/readyz", d.Ready)
 
-	api := app.Group("/api", ratelimit.New(ratelimit.Config{
-		Name: "api", Max: d.RateLimitMax, Window: d.RateLimitWindow, Redis: d.Redis, Log: d.Log,
-	}))
+	limits := d.RateLimits
+	api := app.Group("/api", limits.PerIP("ip", limits.IP))
 
-	// Credential endpoints get a stricter limit against brute force.
-	authLimit := ratelimit.New(ratelimit.Config{
-		Name: "auth", Max: d.AuthRateLimitMax, Window: d.AuthRateLimitWindow, Redis: d.Redis, Log: d.Log,
-	})
-	// Public: these endpoints are how a client gets a token in the first place.
+	// Public: these endpoints are how a client gets a token in the first place, so they can
+	// only be limited per IP; the stricter limit slows down password guessing.
+	authLimit := limits.PerIP("auth", limits.Auth)
 	for _, path := range []string{"/v1/auth/login", "/v1/auth/register", "/v1/auth/refresh"} {
 		api.Post(path, authLimit, proxy.Forward(d.IAMURL, d.UpstreamTimeout))
 	}
 
+	// Everything below is per user: authenticate first, so the limit is keyed by a verified subject.
 	authenticate := middleware.Authenticate(d.Verifier)
+	userLimit := limits.PerUser("user", limits.User)
+	user := []fiber.Handler{authenticate, userLimit}
 	adminWrites := middleware.WriteRequiresRole(jwtauth.RoleAdmin)
-	api.Get("/v1/auth/me", authenticate, proxy.Forward(d.IAMURL, d.UpstreamTimeout))
+
+	api.Get("/v1/auth/me", append(user, proxy.Forward(d.IAMURL, d.UpstreamTimeout))...)
 	proxy.Mount(api, []proxy.Route{{Prefix: "/v1/auth", Upstream: d.IAMURL}}, d.UpstreamTimeout)
-	proxy.Mount(api, []proxy.Route{{Prefix: "/v1/contents", Upstream: d.SSEURL}}, d.UpstreamTimeout, authenticate)
+
+	// A sync fetches every provider, so triggers get their own, much smaller budget.
+	syncLimit := limits.PerUser("sync", limits.Sync)
+	for _, path := range []string{"/v1/sync", "/v1/providers/:id/sync"} {
+		api.Post(path, append(user, adminWrites, syncLimit, proxy.Forward(d.SSEURL, d.UpstreamTimeout))...)
+	}
+
+	proxy.Mount(api, []proxy.Route{{Prefix: "/v1/contents", Upstream: d.SSEURL}}, d.UpstreamTimeout, user...)
 	// Every user may read providers and sync runs; changing them is for admins.
 	proxy.Mount(api, []proxy.Route{
 		{Prefix: "/v1/providers", Upstream: d.SSEURL},
 		{Prefix: "/v1/sync", Upstream: d.SSEURL},
-	}, d.UpstreamTimeout, authenticate, adminWrites)
+	}, d.UpstreamTimeout, append(user, adminWrites)...)
 
 	app.Get("/openapi.yaml", func(c *fiber.Ctx) error {
 		c.Type("yaml")

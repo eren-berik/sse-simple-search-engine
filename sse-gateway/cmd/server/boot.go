@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/config"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/middleware"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
@@ -54,17 +55,20 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	}
 
 	app.http = router.New(router.Deps{
-		IAMURL:              cfg.IAMURL,
-		SSEURL:              cfg.SSEURL,
-		UpstreamTimeout:     cfg.UpstreamTimeout,
-		Ready:               httpx.Ready(required, optional),
-		Log:                 log,
-		Verifier:            jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
-		RateLimitMax:        cfg.RateLimitMax,
-		RateLimitWindow:     cfg.RateLimitWindow,
-		AuthRateLimitMax:    cfg.AuthRateLimitMax,
-		AuthRateLimitWindow: cfg.AuthRateLimitWindow,
-		Redis:               app.redis,
+		IAMURL:          cfg.IAMURL,
+		SSEURL:          cfg.SSEURL,
+		UpstreamTimeout: cfg.UpstreamTimeout,
+		Ready:           httpx.Ready(required, optional),
+		Log:             log,
+		Verifier:        jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
+		RateLimits: middleware.RateLimits{
+			IP:    middleware.Limit{Max: cfg.IPRateLimitMax, Window: cfg.IPRateLimitWindow},
+			Auth:  middleware.Limit{Max: cfg.AuthRateLimitMax, Window: cfg.AuthRateLimitWindow},
+			User:  middleware.Limit{Max: cfg.UserRateLimitMax, Window: cfg.UserRateLimitWindow},
+			Sync:  middleware.Limit{Max: cfg.SyncRateLimitMax, Window: cfg.SyncRateLimitWindow},
+			Redis: app.redis,
+			Log:   log,
+		},
 	})
 	return app, nil
 }

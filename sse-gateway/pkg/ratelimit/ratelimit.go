@@ -1,10 +1,13 @@
-// Package ratelimit limits requests per client IP, optionally sharing counters through Redis.
+// Package ratelimit limits requests per key (the client IP unless configured otherwise),
+// optionally sharing counters through Redis.
 package ratelimit
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -19,24 +22,76 @@ type Config struct {
 	Name   string
 	Max    int
 	Window time.Duration
+	// Key identifies whose requests are counted together; it defaults to the client IP.
+	Key func(c *fiber.Ctx) string
 	// Redis is optional; when set, counters are shared across gateway instances.
 	Redis *redis.Client
 	Log   *slog.Logger
 }
 
-// New limits requests per client IP to Max per Window.
+// New limits requests per key to Max per Window. Rejected requests get 429 with Retry-After.
+// Several limits may apply to one request; the X-RateLimit-* headers report the tightest.
 func New(rc Config) fiber.Handler {
 	cfg := limiter.Config{
-		Max:        rc.Max,
-		Expiration: rc.Window,
+		Max:          rc.Max,
+		Expiration:   rc.Window,
+		KeyGenerator: rc.Key,
 		LimitReached: func(c *fiber.Ctx) error {
+			// The limiter only sets Retry-After on rejection; report the exhausted limit too.
+			c.Set(headerLimit, strconv.Itoa(rc.Max))
+			c.Set(headerRemaining, "0")
+			c.Set(headerReset, c.GetRespHeader(fiber.HeaderRetryAfter))
 			return httpx.Error(c, fiber.StatusTooManyRequests, "rate_limited", "too many requests, slow down")
 		},
 	}
 	if rc.Redis != nil {
 		cfg.Storage = &redisStorage{rdb: rc.Redis, prefix: "ratelimit:" + rc.Name + ":", log: rc.Log}
 	}
-	return limiter.New(cfg)
+	limit := limiter.New(cfg)
+	return func(c *fiber.Ctx) error {
+		err := limit(c)
+		keepTightest(c)
+		return err
+	}
+}
+
+const (
+	headerLimit     = "X-RateLimit-Limit"
+	headerRemaining = "X-RateLimit-Remaining"
+	headerReset     = "X-RateLimit-Reset"
+	tightestKey     = "ratelimit.tightest"
+)
+
+type rateHeaders struct{ limit, remaining, reset string }
+
+// keepTightest runs after a limiter has set its headers. Nested limiters finish inside out, so an
+// outer limit would overwrite an inner, stricter one; restore whichever has fewer requests left.
+func keepTightest(c *fiber.Ctx) {
+	// Header values alias fasthttp buffers that the next Set overwrites; keep copies.
+	cur := rateHeaders{
+		strings.Clone(c.GetRespHeader(headerLimit)),
+		strings.Clone(c.GetRespHeader(headerRemaining)),
+		strings.Clone(c.GetRespHeader(headerReset)),
+	}
+	if cur.remaining == "" {
+		return
+	}
+	prev, ok := c.Locals(tightestKey).(rateHeaders)
+	if ok && atoi(prev.remaining) < atoi(cur.remaining) {
+		c.Set(headerLimit, prev.limit)
+		c.Set(headerRemaining, prev.remaining)
+		c.Set(headerReset, prev.reset)
+		return
+	}
+	c.Locals(tightestKey, cur)
+}
+
+func atoi(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // redisStorage adapts go-redis to fiber.Storage. It fails open: if Redis is unreachable,
