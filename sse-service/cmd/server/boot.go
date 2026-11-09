@@ -21,6 +21,8 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/search"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/cache"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpclient"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/jwtauth"
 )
 
 // application holds the wired components and the resources that must be released on shutdown.
@@ -56,16 +58,19 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	searchSvc := search.NewService(contentRepo, searchCache, cfg.CacheTTL, scorer, log)
 	app.ingest = ingest.NewService(providerRepo, newProviderRegistry(cfg, log), contentRepo, scorer, searchSvc, log)
 
+	keys := jwtauth.NewRemoteKeySource(cfg.JWKSURL, 5*time.Second)
 	app.http = router.New(router.Deps{
-		Contents:        handler.NewContentHandler(searchSvc),
-		Sync:            handler.NewSyncHandler(app.ingest),
-		Providers:       handler.NewProviderHandler(providers.NewService(providerRepo)),
-		Health:          handler.NewHealthHandler(pool, searchCache),
-		Log:             log,
-		AdminAPIKey:     cfg.AdminAPIKey,
-		RateLimitMax:    cfg.RateLimitMax,
-		RateLimitWindow: cfg.RateLimitWindow,
-		Redis:           rdb,
+		Contents:  handler.NewContentHandler(searchSvc),
+		Sync:      handler.NewSyncHandler(app.ingest),
+		Providers: handler.NewProviderHandler(providers.NewService(providerRepo)),
+		Verifier:  jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
+		// The cache and the identity service are optional for readiness: searches fall back to the
+		// database and already fetched signing keys keep verifying tokens.
+		Ready: httpx.Ready(
+			map[string]httpx.Check{"database": pool.Ping},
+			map[string]httpx.Check{"cache": searchCache.Ping, "jwks": keys.Ping},
+		),
+		Log: log,
 	})
 	return app, nil
 }

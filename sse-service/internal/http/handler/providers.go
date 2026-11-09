@@ -9,8 +9,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/response"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/providers"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
 )
 
 // ProviderManager is the provider management use case consumed by ProviderHandler.
@@ -61,7 +61,7 @@ func (h *ProviderHandler) List(c *fiber.Ctx) error {
 	for _, p := range list {
 		out = append(out, toProviderDTO(p))
 	}
-	return response.OK(c, out, nil)
+	return httpx.OK(c, out, nil)
 }
 
 // Create handles POST /api/v1/providers.
@@ -74,7 +74,7 @@ func (h *ProviderHandler) Create(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusCreated).JSON(response.Data{Data: toProviderDTO(p)})
+	return httpx.Created(c, toProviderDTO(p))
 }
 
 // Update handles PATCH /api/v1/providers/:id.
@@ -91,7 +91,7 @@ func (h *ProviderHandler) Update(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return response.OK(c, toProviderDTO(p), nil)
+	return httpx.OK(c, toProviderDTO(p), nil)
 }
 
 func toProviderDTO(p domain.Provider) providerDTO {

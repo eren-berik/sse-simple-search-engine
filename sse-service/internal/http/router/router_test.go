@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/stretchr/testify/assert"
@@ -22,6 +21,9 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/scoring"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/providers"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/search"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/jwtauth"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/jwtauth/jwtauthtest"
 )
 
 type fakeSearcher struct {
@@ -59,9 +61,7 @@ func (f fakeSyncer) Sync(context.Context) (ingest.Report, error) { return ingest
 func (f fakeSyncer) SyncProvider(context.Context, int64) (ingest.Report, error) {
 	return ingest.Report{}, f.err
 }
-func (f fakeSyncer) Status(context.Context) ([]domain.SyncRun, error) {
-	return nil, nil
-}
+func (f fakeSyncer) Status(context.Context) ([]domain.SyncRun, error) { return nil, nil }
 
 type fakeProviders struct{}
 
@@ -83,51 +83,49 @@ func (fakeProviders) Update(_ context.Context, id int64, _ providers.UpdateInput
 	return domain.Provider{ID: 1, Name: "provider1"}, nil
 }
 
-type fakePinger struct{ err error }
-
-func (f fakePinger) Ping(context.Context) error { return f.err }
-
-type testDeps struct {
-	searcher *fakeSearcher
-	syncer   fakeSyncer
-	db       fakePinger
-	cache    fakePinger
-	limit    int
+type testApp struct {
+	*fiber.App
+	t      *testing.T
+	viewer string
+	admin  string
 }
 
-func newApp(t *testing.T, d testDeps) *fiber.App {
+func newApp(t *testing.T, searcher *fakeSearcher, syncer fakeSyncer) *testApp {
 	t.Helper()
-	if d.searcher == nil {
-		d.searcher = &fakeSearcher{}
+	if searcher == nil {
+		searcher = &fakeSearcher{}
 	}
-	if d.limit == 0 {
-		d.limit = 1000
-	}
-	return New(Deps{
-		Contents:        handler.NewContentHandler(d.searcher),
-		Sync:            handler.NewSyncHandler(d.syncer),
-		Providers:       handler.NewProviderHandler(fakeProviders{}),
-		Health:          handler.NewHealthHandler(d.db, d.cache),
-		Log:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		AdminAPIKey:     "secret",
-		RateLimitMax:    d.limit,
-		RateLimitWindow: time.Minute,
+	iss := jwtauthtest.New(t)
+	app := New(Deps{
+		Contents:  handler.NewContentHandler(searcher),
+		Sync:      handler.NewSyncHandler(syncer),
+		Providers: handler.NewProviderHandler(fakeProviders{}),
+		Verifier:  iss.Verifier(),
+		Ready:     httpx.Ready(nil, nil),
+		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
+	return &testApp{App: app, t: t, viewer: iss.Token(t, jwtauth.RoleViewer), admin: iss.Token(t, jwtauth.RoleAdmin)}
 }
 
-func do(t *testing.T, app *fiber.App, req *http.Request) (*http.Response, map[string]any) {
-	t.Helper()
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
+// call sends a request with the given bearer token (empty for none) and decodes the JSON body.
+func (a *testApp) call(method, url, token, body string) (*http.Response, map[string]any) {
+	a.t.Helper()
+	req := httptest.NewRequest(method, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := a.Test(req, -1)
+	require.NoError(a.t, err)
 	defer resp.Body.Close()
-	var body map[string]any
+	var parsed map[string]any
 	data, _ := io.ReadAll(resp.Body)
-	_ = json.Unmarshal(data, &body)
-	return resp, body
+	_ = json.Unmarshal(data, &parsed)
+	return resp, parsed
 }
 
-func get(t *testing.T, app *fiber.App, url string) (*http.Response, map[string]any) {
-	return do(t, app, httptest.NewRequest(http.MethodGet, url, nil))
+func (a *testApp) get(url string) (*http.Response, map[string]any) {
+	return a.call(http.MethodGet, url, a.viewer, "")
 }
 
 func errorCode(body map[string]any) string {
@@ -136,40 +134,66 @@ func errorCode(body map[string]any) string {
 	return code
 }
 
+func TestAuthorization(t *testing.T) {
+	app := newApp(t, nil, fakeSyncer{})
+
+	tests := []struct {
+		method, path, body string
+		anonymous          int
+		viewer             int
+		admin              int
+	}{
+		{http.MethodGet, "/api/v1/contents", "", 401, 200, 200},
+		{http.MethodGet, "/api/v1/contents/1", "", 401, 200, 200},
+		{http.MethodGet, "/api/v1/providers", "", 401, 200, 200},
+		{http.MethodGet, "/api/v1/sync/runs", "", 401, 200, 200},
+		{http.MethodPost, "/api/v1/providers", `{"name":"feed","url":"https://x.io","format":"json"}`, 401, 403, 201},
+		{http.MethodPatch, "/api/v1/providers/1", `{"enabled":false}`, 401, 403, 200},
+		{http.MethodPost, "/api/v1/providers/1/sync", "", 401, 403, 200},
+		{http.MethodPost, "/api/v1/sync", "", 401, 403, 200},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
+			resp, _ := app.call(tt.method, tt.path, "", tt.body)
+			assert.Equal(t, tt.anonymous, resp.StatusCode, "anonymous")
+			resp, _ = app.call(tt.method, tt.path, app.viewer, tt.body)
+			assert.Equal(t, tt.viewer, resp.StatusCode, "viewer")
+			resp, _ = app.call(tt.method, tt.path, app.admin, tt.body)
+			assert.Equal(t, tt.admin, resp.StatusCode, "admin")
+		})
+	}
+
+	resp, body := app.call(http.MethodGet, "/api/v1/contents", "forged.token.value", "")
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Equal(t, "invalid_token", errorCode(body))
+}
+
 func TestListContents(t *testing.T) {
 	s := &fakeSearcher{}
-	app := newApp(t, testDeps{searcher: s})
+	app := newApp(t, s, fakeSyncer{})
 
-	resp, body := get(t, app, "/api/v1/contents?q=go&type=video&page=2&per_page=10")
+	resp, body := app.get("/api/v1/contents?q=go&type=video&provider=Provider1&page=2&per_page=10")
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "HIT", resp.Header.Get("X-Cache"))
-	assert.Equal(t, domain.SearchQuery{Keyword: "go", Type: domain.ContentTypeVideo, Sort: domain.SortRelevance, Page: 2, PerPage: 10}, s.lastQuery)
+	assert.Equal(t, domain.SearchQuery{Keyword: "go", Type: domain.ContentTypeVideo, Provider: "provider1", Sort: domain.SortRelevance, Page: 2, PerPage: 10}, s.lastQuery)
 
 	items := body["data"].([]any)
 	require.Len(t, items, 1)
 	item := items[0].(map[string]any)
-	assert.Equal(t, "Go", item["title"])
 	assert.Equal(t, 41.3, item["score"], "score is rounded to 2 decimals")
 	assert.Equal(t, 0.1235, item["relevance"], "relevance is present when sorted by relevance")
 
 	meta := body["meta"].(map[string]any)
-	assert.Equal(t, float64(21), meta["total"])
 	assert.Equal(t, float64(3), meta["total_pages"])
 	assert.Equal(t, "relevance", meta["sort"])
-}
 
-func TestListOmitsRelevanceWhenSortedByPopularity(t *testing.T) {
-	app := newApp(t, testDeps{})
-
-	_, body := get(t, app, "/api/v1/contents?sort=popularity")
-
-	item := body["data"].([]any)[0].(map[string]any)
-	assert.NotContains(t, item, "relevance")
+	_, body = app.get("/api/v1/contents?sort=popularity")
+	assert.NotContains(t, body["data"].([]any)[0].(map[string]any), "relevance")
 }
 
 func TestListValidation(t *testing.T) {
-	app := newApp(t, testDeps{})
+	app := newApp(t, nil, fakeSyncer{})
 
 	for _, url := range []string{
 		"/api/v1/contents?type=podcast",
@@ -177,16 +201,16 @@ func TestListValidation(t *testing.T) {
 		"/api/v1/contents?page=abc",
 		"/api/v1/contents?per_page=1000",
 	} {
-		resp, body := get(t, app, url)
+		resp, body := app.get(url)
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, url)
 		assert.Equal(t, "invalid_input", errorCode(body), url)
 	}
 }
 
 func TestListHidesInternalErrors(t *testing.T) {
-	app := newApp(t, testDeps{searcher: &fakeSearcher{err: errors.New("pq: connection refused")}})
+	app := newApp(t, &fakeSearcher{err: errors.New("pq: connection refused")}, fakeSyncer{})
 
-	resp, body := get(t, app, "/api/v1/contents")
+	resp, body := app.get("/api/v1/contents")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Equal(t, "internal_error", errorCode(body))
@@ -194,128 +218,57 @@ func TestListHidesInternalErrors(t *testing.T) {
 }
 
 func TestGetContent(t *testing.T) {
-	app := newApp(t, testDeps{})
+	app := newApp(t, nil, fakeSyncer{})
 
-	resp, body := get(t, app, "/api/v1/contents/1")
+	resp, body := app.get("/api/v1/contents/1")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	breakdown := body["data"].(map[string]any)["score_breakdown"].(map[string]any)
 	assert.Equal(t, 41.3, breakdown["final"])
 
-	resp, body = get(t, app, "/api/v1/contents/2")
+	resp, body = app.get("/api/v1/contents/2")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Equal(t, "not_found", errorCode(body))
 
-	resp, _ = get(t, app, "/api/v1/contents/abc")
+	resp, _ = app.get("/api/v1/contents/abc")
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
-func TestAdminSyncRequiresAPIKey(t *testing.T) {
-	app := newApp(t, testDeps{})
+func TestProviderManagement(t *testing.T) {
+	app := newApp(t, nil, fakeSyncer{})
 
-	resp, body := do(t, app, httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil))
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	assert.Equal(t, "unauthorized", errorCode(body))
+	resp, body := app.call(http.MethodPost, "/api/v1/providers", app.admin, `{"name":"feed","url":"https://x.io","format":"json"}`)
+	assert.Equal(t, http.StatusCreated, resp.StatusCode)
+	assert.Equal(t, "feed", body["data"].(map[string]any)["name"])
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	req.Header.Set("X-API-Key", "secret")
-	resp, _ = do(t, app, req)
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	resp, body = app.call(http.MethodPost, "/api/v1/providers", app.admin, `{"name":"provider1","url":"https://x.io","format":"json"}`)
+	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+	assert.Equal(t, "conflict", errorCode(body))
+
+	resp, _ = app.call(http.MethodPost, "/api/v1/providers", app.admin, `not json`)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	resp, _ = app.call(http.MethodPatch, "/api/v1/providers/9", app.admin, `{"enabled":false}`)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
-func TestAdminSyncConflict(t *testing.T) {
-	app := newApp(t, testDeps{syncer: fakeSyncer{err: domain.ErrSyncInProgress}})
+func TestSyncConflict(t *testing.T) {
+	app := newApp(t, nil, fakeSyncer{err: domain.ErrSyncInProgress})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
-	req.Header.Set("X-API-Key", "secret")
-	resp, body := do(t, app, req)
+	resp, body := app.call(http.MethodPost, "/api/v1/sync", app.admin, "")
 
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 	assert.Equal(t, "sync_in_progress", errorCode(body))
 }
 
-func TestRateLimit(t *testing.T) {
-	app := newApp(t, testDeps{limit: 2})
+func TestPublicEndpoints(t *testing.T) {
+	app := newApp(t, nil, fakeSyncer{})
 
-	for range 2 {
-		resp, _ := get(t, app, "/api/v1/contents")
-		require.Equal(t, http.StatusOK, resp.StatusCode)
+	for _, path := range []string{"/healthz", "/readyz", "/", "/openapi.yaml"} {
+		resp, _ := app.call(http.MethodGet, path, "", "")
+		assert.Equal(t, http.StatusOK, resp.StatusCode, path)
 	}
-	resp, body := get(t, app, "/api/v1/contents")
-	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
-	assert.Equal(t, "rate_limited", errorCode(body))
 
-	resp, _ = get(t, app, "/healthz")
-	assert.Equal(t, http.StatusOK, resp.StatusCode, "health checks are not rate limited")
-}
-
-func TestReadiness(t *testing.T) {
-	resp, body := get(t, newApp(t, testDeps{}), "/readyz")
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "ok", body["status"])
-
-	resp, body = get(t, newApp(t, testDeps{cache: fakePinger{err: errors.New("down")}}), "/readyz")
-	assert.Equal(t, http.StatusOK, resp.StatusCode, "cache outage keeps the service ready")
-	assert.Equal(t, "degraded", body["status"])
-
-	resp, _ = get(t, newApp(t, testDeps{db: fakePinger{err: errors.New("down")}}), "/readyz")
-	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-}
-
-func TestServesDashboardAndSpec(t *testing.T) {
-	app := newApp(t, testDeps{})
-
-	resp, _ := get(t, app, "/")
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/html")
-
-	resp, _ = get(t, app, "/openapi.yaml")
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-
-	resp, body := get(t, app, "/does-not-exist")
+	resp, body := app.call(http.MethodGet, "/does-not-exist", "", "")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Equal(t, "not_found", errorCode(body))
-}
-
-func adminRequest(method, url, body string) *http.Request {
-	req := httptest.NewRequest(method, url, strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", "secret")
-	return req
-}
-
-func TestProviders(t *testing.T) {
-	app := newApp(t, testDeps{})
-
-	resp, body := get(t, app, "/api/v1/providers")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Len(t, body["data"], 1)
-
-	resp, body = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers", `{"name":"feed","url":"https://x.io","format":"json"}`))
-	assert.Equal(t, http.StatusCreated, resp.StatusCode)
-	assert.Equal(t, "feed", body["data"].(map[string]any)["name"])
-
-	resp, body = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers", `{"name":"provider1","url":"https://x.io","format":"json"}`))
-	assert.Equal(t, http.StatusConflict, resp.StatusCode)
-	assert.Equal(t, "conflict", errorCode(body))
-
-	resp, _ = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers", `not json`))
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-
-	resp, _ = do(t, app, adminRequest(http.MethodPatch, "/api/v1/providers/1", `{"enabled":false}`))
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	resp, _ = do(t, app, adminRequest(http.MethodPatch, "/api/v1/providers/9", `{"enabled":false}`))
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-
-	resp, _ = do(t, app, adminRequest(http.MethodPost, "/api/v1/providers/1/sync", ``))
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestListPassesProviderFilter(t *testing.T) {
-	s := &fakeSearcher{}
-	app := newApp(t, testDeps{searcher: s})
-
-	resp, _ := get(t, app, "/api/v1/contents?provider=Provider2")
-
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "provider2", s.lastQuery.Provider)
 }

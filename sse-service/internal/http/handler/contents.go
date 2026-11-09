@@ -11,9 +11,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/response"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/scoring"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/search"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
 )
 
 // Searcher is the search use case consumed by ContentHandler.
@@ -90,7 +90,7 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 		}
 		items = append(items, dto)
 	}
-	return response.OK(c, items, listMeta{
+	return httpx.OK(c, items, listMeta{
 		Page: res.Page, PerPage: res.PerPage, Total: res.Total, TotalPages: res.TotalPages(), Sort: string(res.Sort),
 	})
 }
@@ -112,7 +112,7 @@ func (h *ContentHandler) Get(c *fiber.Ctx) error {
 		Engagement:      round(breakdown.Engagement, 4),
 		Final:           round(breakdown.Final, 2),
 	}
-	return response.OK(c, contentDetailDTO{contentDTO: toDTO(content), ScoreBreakdown: breakdown}, nil)
+	return httpx.OK(c, contentDetailDTO{contentDTO: toDTO(content), ScoreBreakdown: breakdown}, nil)
 }
 
 func toDTO(c domain.Content) contentDTO {
