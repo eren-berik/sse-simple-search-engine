@@ -6,7 +6,7 @@ Sistem üç mikroservisten oluşur:
 
 | Servis | Sorumluluk |
 |---|---|
-| **sse-gateway** | Tek giriş noktası. API isteklerini ilgili servise yönlendirir; rate limit, request-id, dashboard ve API dokümanı burada |
+| **sse-gateway** | Tek giriş noktası. API isteklerini ilgili servise yönlendirir. Middleware katmanında token doğrulama, rol kontrolü, kademeli rate limit, circuit breaker ve retry; ayrıca dashboard ve API dokümanı |
 | **iam-service** | Kullanıcılar, şifreler, roller, access/refresh token'lar |
 | **sse-service** | Asıl iş mantığı: provider entegrasyonu, puanlama, arama, cache, senkronizasyon |
 
@@ -66,8 +66,8 @@ Postgres host'ta **5433** portundan açılır, böylece lokalde çalışan bir P
 
 ```
                         ┌──────────────────────── sse-gateway (:8080, tek açık port) ────────────────────────┐
-  Browser / API ───────►│ request-id · log · rate limit (IP başına; login/register/refresh için daha sıkı)    │
-                        │ dashboard (statik) · /docs · /openapi.yaml                                          │
+  Browser / API ───────►│ request-id · log · IP limiti · JWT doğrulama · kullanıcı limiti · rol kontrolü     │
+                        │ upstream başına circuit breaker + retry · dashboard · /docs · /openapi.yaml        │
                         │   /api/v1/auth/*                         /api/v1/contents|providers|sync/*          │
                         └───────────┬───────────────────────────────────────────┬────────────────────────────┘
                                     ▼                                           ▼
@@ -83,8 +83,8 @@ Postgres host'ta **5433** portundan açılır, böylece lokalde çalışan bir P
 
 ### Temel kararlar
 
-- **Gateway iş mantığı içermez.** Sadece route tablosuna göre yönlendirir ve edge görevlerini üstlenir: rate limit, `X-Forwarded-*` header'ları, request-id ve statik dosyalar. Tanımsız API path'leri hiçbir servise iletilmez.
-- **Token'ı servisler doğrular.** iam-service access token'ları private key ile imzalar ve public key'leri `/.well-known/jwks.json` adresinde yayınlar. sse-service bu key'leri çekip cache'ler ve her isteği kendisi doğrular. Rol kontrolü iş kurallarının sahibi olan sse-service'te yapılır. Gateway token'ı olduğu gibi iletir; böylece gateway'i atlayan bir istek de yetkisiz işlem yapamaz.
+- **Gateway iş mantığı içermez.** Route tablosuna göre yönlendirir ve edge görevlerini bir middleware katmanında toplar: token doğrulama, kaba rol kontrolü, rate limit, circuit breaker ve retry; ayrıca `X-Forwarded-*` header'ları, request-id ve statik dosyalar. Tanımsız API path'leri hiçbir servise iletilmez. Ayrıntılar: [Gateway Middleware Katmanı](#gateway-middleware-katmanı).
+- **Token iki kez doğrulanır (defense in depth).** iam-service access token'ları private key ile imzalar ve public key'leri `/.well-known/jwks.json` adresinde yayınlar. Gateway geçersiz token'lı ve yetkisiz istekleri servise ulaşmadan reddeder. sse-service ise aynı key'lerle her isteği yeniden doğrular ve rol kontrolünü kendisi de yapar. Böylece gateway'i atlayan ya da iç ağdan gelen bir istek de yetkisiz işlem yapamaz. Maliyeti küçüktür: key'ler bellekte cache'lidir, doğrulama ağ çağrısı gerektirmez.
 - **Servisler birbirinden bağımsızdır.** Her servis ayrı bir Go modülüdür ve kendi `pkg/` klasörü, kendi Dockerfile'ı ve kendi build context'i vardır. Ortak bir kütüphane modülü yoktur. Bu, `httpx` ve `jwtauth` gibi küçük yardımcıların her serviste ayrı bir kopyası olması anlamına gelir; karşılığında servisler bağımsız versiyonlanıp deploy edilebilir. Kökteki `go.work` sadece editör kolaylığı içindir; Docker build'leri onu kullanmaz.
 - **Her servisin kendi veritabanı vardır.** Aynı PostgreSQL instance'ı üzerinde `iam` ve `contents` adında iki ayrı veritabanı kullanılır; servisler birbirinin tablolarına erişmez.
 - **API, provider'ları senkron çağırmaz.** Provider verisi arka planda çekilip veritabanına yazılır, arama istekleri sadece veritabanına ve cache'e gider.
@@ -97,11 +97,12 @@ WingieCase/
 │   ├── cmd/server/              main.go · boot.go (bağımlılıkların kurulumu) · server.go (sunucu, graceful shutdown)
 │   ├── internal/
 │   │   ├── config/
-│   │   ├── proxy/               route tablosu, upstream'e iletme (Forward/Mount)
+│   │   ├── proxy/               route tablosu, upstream'e iletme (Forward/Mount, Guard arayüzü)
+│   │   ├── http/middleware/     auth (JWT + rol), kademeli rate limit, resilience (circuit breaker + retry)
 │   │   ├── http/router/
 │   │   └── web/static/          dashboard (HTML + vanilla JS, binary'ye gömülü)
 │   ├── openapi/                 tüm sistemin OpenAPI spec'i
-│   └── pkg/                     httpx, ratelimit
+│   └── pkg/                     httpx, ratelimit, jwtauth (sadece doğrulama + jwtauthtest)
 ├── iam-service/
 │   ├── cmd/server/
 │   ├── internal/
@@ -126,6 +127,67 @@ WingieCase/
 ```
 
 Her serviste aynı katmanlı yapı kullanılır: handler → service → repository. Servisler interface'lere bağlıdır (`ContentSearcher`, `Store`, `ProviderSource`, `Builder`, `Cache`, `Authenticator`), bu sayede her katman sahte implementasyonlarla izole test edilebilir.
+
+---
+
+## Gateway Middleware Katmanı
+
+Kesişen (cross-cutting) edge görevleri `sse-gateway/internal/http/middleware` paketinde toplanır. Bir API isteği şu sırayla işlenir:
+
+```
+request-id → log → IP limiti → [public auth endpoint'leri: auth limiti]
+                             → JWT doğrulama → kullanıcı limiti → rol kontrolü → [sync: sync limiti]
+                             → retry → circuit breaker → upstream
+```
+
+Sıranın gerekçeleri:
+- IP limiti en başta: token doğrulamadan önce kaba bir sel koruması sağlar.
+- Kullanıcı limiti doğrulamadan sonra: anahtarı token'daki `sub`, yani doğrulanmış kullanıcı kimliği. Doğrulanmamış bir token'dan okunan `sub`'a güvenilseydi uydurma `sub`'larla sınırsız kota açılabilirdi.
+- Rol kontrolünden önce: yetkisiz denemeler de kullanıcının kotasından düşer.
+- Retry dışta, breaker içte: her deneme breaker tarafından sayılır, devre açıldığı anda retry de durur.
+
+### Kimlik doğrulama ve yetkilendirme
+
+| Endpoint | Gateway'deki kural |
+|---|---|
+| `POST /auth/login`, `/auth/register`, `/auth/refresh`, `/auth/logout` | Public (token almanın yolu bunlar) |
+| `GET /auth/me`, `/contents/*`, `GET /providers`, `GET /sync/runs` | Geçerli token |
+| `POST`/`PATCH`/`DELETE` `/providers/*`, `POST /sync` | Geçerli token + `admin` |
+
+Gateway yalnızca kaba kuralları uygular; iş kuralına bağlı yetki kontrolleri servislerde kalır ve sse-service token'ı yeniden doğrular. Token yoksa veya geçersizse `401`, rol yetmiyorsa `403` döner. JWKS'e ulaşılamıyorsa ve key cache'te de yoksa `503 auth_unavailable` döner.
+
+### Kademeli rate limit
+
+| Kademe | Anahtar | Varsayılan | Kapsam |
+|---|---|---|---|
+| IP | İstemci IP'si | 300 / dk | Tüm `/api` istekleri, doğrulamadan önce |
+| Auth | İstemci IP'si | 10 / dk | login, register, refresh (brute-force'a karşı; henüz token yok) |
+| Kullanıcı | Token'daki `sub` | 100 / dk | Token'lı tüm istekler |
+| Sync | Token'daki `sub` | 5 / dk | `POST /sync` ve `POST /providers/{id}/sync` (her sync tüm provider'ları çeker) |
+
+- **Anahtar token değil kullanıcı:** Token anahtar olsaydı kullanıcı refresh ile yeni token alıp sayacını sıfırlayabilirdi. `sub` refresh'ten sonra da aynı kalır. Aynı NAT arkasındaki kullanıcılar da tek bir IP kotasını paylaşmaz.
+- **Header'lar:** Yanıtlarda `X-RateLimit-Limit`, `X-RateLimit-Remaining` ve `X-RateLimit-Reset` bulunur. Birden fazla limit uygulandığında header'lar en sıkı olanı gösterir. Limit aşılınca `429 rate_limited` ve `Retry-After` döner; dashboard kaç saniye beklenmesi gerektiğini gösterir.
+- **Paylaşım:** Sayaçlar Redis'te tutulur, bu yüzden tüm gateway instance'ları aynı limiti paylaşır. Redis'e ulaşılamazsa fail-open çalışır.
+
+### Circuit breaker
+
+Her upstream servisin (iam-service, sse-service) ayrı bir breaker'ı vardır ([sony/gobreaker](https://github.com/sony/gobreaker)). Böylece bir servisin çökmesi diğerine giden trafiği etkilemez.
+
+- **Hata sayılan durumlar:** Bağlantı hataları, timeout'lar ve upstream'in `502/503/504` yanıtları. `500` ve `4xx` hata sayılmaz; servis ayakta ve cevap veriyor demektir.
+- **Açılma:** `BREAKER_FAILURE_THRESHOLD` (5) ardışık hatadan sonra devre açılır. Açık devrede istekler upstream'e hiç gitmez; milisaniyeler içinde `503 upstream_unavailable` ve `Retry-After` döner. Böylece hem istemci timeout kadar beklemez hem de toparlanmaya çalışan servise yük binmez.
+- **Toparlanma:** `BREAKER_OPEN_TIMEOUT` (30 sn) sonra devre yarı açık duruma geçer ve bir deneme isteği geçirilir. Deneme başarılıysa devre kapanır, başarısızsa yeniden açılır.
+- **İzleme:** Durum değişiklikleri loglanır, açık devreler `/readyz` çıktısında `circuit:<servis>` olarak görünür.
+
+### Retry ve exponential backoff
+
+Gateway'de retry kasıtlı olarak dar tutuldu, çünkü yanlış kullanıldığında zarar verir:
+
+- **Sadece `GET` ve `HEAD` istekleri tekrar denenir.** Login, register, refresh, sync ve provider ekleme denenmez. İlk istek servise ulaşmış ama yanıt kaybolmuş olabilir. Refresh'i tekrar göndermek token'ın "tekrar kullanıldığı" sanılmasına ve oturumun kapanmasına, sync'i tekrarlamak işin iki kez yapılmasına yol açar.
+- **Sadece geçici ve hızlı hatalarda denenir:** bağlantı hatası, `502` ve `503`. Timeout'lar (bağlantı kurulurken olanlar dahil) denenmez; zaman bütçesi zaten tükenmiştir.
+- **En fazla `UPSTREAM_MAX_RETRIES` (2) ek deneme yapılır.** Bekleme süresi her denemede ikiye katlanır (100 ms, 200 ms, …, en fazla 1 sn). Süreye *full jitter* uygulanır, yani 0 ile bu üst sınır arasında rastgele bir süre beklenir; aynı anda hata alan istemciler toparlanan servise hep birlikte yüklenmez.
+- **Devre açıksa hiç denenmez.**
+
+Provider'lara giden istekler gateway'den geçmez. Onların rate limit, retry ve backoff'u sse-service'teki `pkg/httpclient` içinde ayrıca uygulanır (bkz. [Provider Entegrasyonu](#provider-entegrasyonu)).
 
 ---
 
@@ -188,7 +250,7 @@ Token'lar `sessionStorage`'da tutulur: sayfa yenilense de kalır, sekme kapanın
 Kimlik yönetimi ile içerik araması farklı hızlarda değişen, farklı güvenlik gereksinimleri olan iki alan:
 - **Private key izolasyonu:** İmzalama anahtarı sadece iam-service'te kalıyor.
 - **Bağımsız ölçekleme:** Arama yükü arttığında yalnızca sse-service ölçeklenebiliyor.
-- **Tek giriş noktası:** Gateway sayesinde istemci tek bir origin görüyor (CORS gerekmiyor). Rate limit gibi edge görevleri de tek yerde toplanıyor.
+- **Tek giriş noktası:** Gateway sayesinde istemci tek bir origin görüyor (CORS gerekmiyor). Token doğrulama, rate limit ve circuit breaker gibi edge görevleri de tek yerde toplanıyor.
 
 ### PostgreSQL (MongoDB ve Elasticsearch yerine)
 
@@ -320,7 +382,7 @@ Tam şema için [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi
 - **Graceful degradation:**
   - Redis yoksa aramalar doğrudan DB'den karşılanır (`BYPASS`).
   - Gateway'deki rate limiter fail-open çalışır: Redis'e ulaşamazsa istekleri reddetmez.
-  - JWKS key'leri bellekte cache'lendiği için iam-service kısa süre düşse bile mevcut token'lar doğrulanmaya devam eder.
+  - JWKS key'leri gateway'de ve sse-service'te bellekte cache'lendiği için iam-service kısa süre düşse bile mevcut token'lar doğrulanmaya devam eder.
   - Bu durumlarda `/readyz` `degraded` döner ama servis hazır kalır.
 
 ---
@@ -342,7 +404,9 @@ make test-integration   # + PostgreSQL ve Redis üzerinde integration testler
 | sse | `http/router` | **Yetki matrisi:** her endpoint için anonim / viewer / admin durum kodları; validasyon; provider yönetimi |
 | sse | `ingest`, `registry`, `service/*` | Provider'ların DB'den okunması, devre dışı provider'lar, tek provider sync'i, format adapter'ları, provider validasyonu, cache davranışı |
 | sse | `repository` *(integration)* | Upsert, FTS/relevance, provider filtresi, foreign key, provider CRUD, migration seed'i |
-| gateway | `http/router` | Her path'in doğru servise gitmesi; path/query/body/Authorization'ın iletilmesi; istemcinin gönderdiği `X-Forwarded-For`'un ezilmesi; request-id'nin taşınması; tanımsız path'lerin iletilmemesi; upstream kapalıyken 502; auth endpoint'lerindeki sıkı rate limit |
+| gateway | `http/router` | Her path'in doğru servise gitmesi; path/query/body/Authorization'ın iletilmesi; istemcinin gönderdiği `X-Forwarded-For`'un ezilmesi; request-id'nin taşınması; tanımsız path'lerin iletilmemesi; upstream kapalıyken 502; **edge yetki matrisi** (anonim / viewer / admin, reddedilen isteğin servise hiç ulaşmaması); auth, IP, kullanıcı ve sync limitleri (limitin token'ı değil kullanıcıyı takip etmesi, aynı IP'deki kullanıcıların ayrı kotası); açık devrenin yalnızca kendi servisini etkilemesi |
+| gateway | `http/middleware` | JWT doğrulama ve rol kontrolleri, okuma/yazma ayrımı, JWKS kesintisinde 503; idempotent isteklerin tekrar denenmesi, yazma isteklerinin ve timeout'ların denenmemesi, devrenin açılıp yarı açık denemeyle kapanması, açık devrenin retry'ı durdurması, `500`'ün devreyi açmaması, backoff'un üst sınırı ve jitter'ı |
+| gateway | `pkg/ratelimit` | Pencere başına limit, özel anahtar, iç içe limitlerde en sıkı header'ın raporlanması |
 
 Integration testleri her çalıştırmada geçici bir veritabanı oluşturup sonunda siler. CI (GitHub Actions) her modül için vet, golangci-lint ve tüm testleri Postgres/Redis servisleriyle çalıştırır.
 
@@ -357,10 +421,19 @@ Her servis environment variable ile yapılandırılır. Compose'un okuduğu değ
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
 | `IAM_URL`, `SSE_URL` | *(zorunlu)* | Upstream servis adresleri |
-| `UPSTREAM_TIMEOUT` | `30s` | Upstream istek zaman aşımı |
+| `UPSTREAM_TIMEOUT` | `30s` | Upstream'e yapılan her denemenin zaman aşımı |
+| `JWKS_URL` | *(zorunlu)* | iam-service'in public key adresi |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | `iam-service` / `sse` | iam-service ile aynı olmalı |
 | `REDIS_URL` | boş | Paylaşımlı rate limit sayaçları |
-| `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW` | `100` / `1m` | `/api/*` için IP başına limit |
+| `IP_RATE_LIMIT_MAX` / `IP_RATE_LIMIT_WINDOW` | `300` / `1m` | Tüm `/api` istekleri için IP başına limit |
 | `AUTH_RATE_LIMIT_MAX` / `AUTH_RATE_LIMIT_WINDOW` | `10` / `1m` | login, register ve refresh için IP başına limit |
+| `USER_RATE_LIMIT_MAX` / `USER_RATE_LIMIT_WINDOW` | `100` / `1m` | Kullanıcı başına limit |
+| `SYNC_RATE_LIMIT_MAX` / `SYNC_RATE_LIMIT_WINDOW` | `5` / `1m` | Kullanıcı başına sync tetikleme limiti |
+| `BREAKER_FAILURE_THRESHOLD` | `5` | Devreyi açan ardışık hata sayısı |
+| `BREAKER_OPEN_TIMEOUT` | `30s` | Devrenin açık kalma süresi |
+| `BREAKER_HALF_OPEN_REQUESTS` | `1` | Yarı açık durumda izin verilen deneme isteği |
+| `UPSTREAM_MAX_RETRIES` | `2` | `GET`/`HEAD` için ek deneme sayısı (`0` kapatır) |
+| `UPSTREAM_BASE_BACKOFF` / `UPSTREAM_MAX_BACKOFF` | `100ms` / `1s` | Exponential backoff başlangıcı ve üst sınırı |
 
 **iam-service**
 
