@@ -1,3 +1,6 @@
 go 1.26.0
 
-use ./sse-service
+use (
+	./iam-service
+	./sse-service
+)
