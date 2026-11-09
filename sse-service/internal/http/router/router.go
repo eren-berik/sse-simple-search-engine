@@ -43,6 +43,7 @@ func New(d Deps) *fiber.App {
 	admin := jwtauth.RequireRole(jwtauth.RoleAdmin)
 	v1.Post("/providers", admin, d.Providers.Create)
 	v1.Patch("/providers/:id", admin, d.Providers.Update)
+	v1.Delete("/providers/:id", admin, d.Providers.Delete)
 	v1.Post("/providers/:id/sync", admin, d.Sync.TriggerProvider)
 	v1.Post("/sync", admin, d.Sync.Trigger)
 

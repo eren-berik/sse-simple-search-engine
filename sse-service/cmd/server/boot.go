@@ -56,13 +56,14 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	providerRepo := postgres.NewProviderRepository(pool)
 	scorer := newScorer(cfg)
 	searchSvc := search.NewService(contentRepo, searchCache, cfg.CacheTTL, scorer, log)
-	app.ingest = ingest.NewService(providerRepo, newProviderRegistry(cfg, log), contentRepo, scorer, searchSvc, log)
+	providerRegistry := newProviderRegistry(cfg, log)
+	app.ingest = ingest.NewService(providerRepo, providerRegistry, contentRepo, scorer, searchSvc, log)
 
 	keys := jwtauth.NewRemoteKeySource(cfg.JWKSURL, 5*time.Second)
 	app.http = router.New(router.Deps{
 		Contents:  handler.NewContentHandler(searchSvc),
 		Sync:      handler.NewSyncHandler(app.ingest),
-		Providers: handler.NewProviderHandler(providers.NewService(providerRepo, searchSvc, log)),
+		Providers: handler.NewProviderHandler(providers.NewService(providerRepo, providerRegistry, searchSvc, log)),
 		Verifier:  jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
 		// The cache and the identity service are optional for readiness: searches fall back to the
 		// database and already fetched signing keys keep verifying tokens.

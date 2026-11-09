@@ -70,3 +70,49 @@ func TestClientIsReusedPerProviderUntilURLChanges(t *testing.T) {
 	cfg.URL = "http://b"
 	assert.NotSame(t, first, r.client(cfg))
 }
+
+func TestDetect(t *testing.T) {
+	jsonData, err := os.ReadFile("../../../test/testdata/provider1.json")
+	require.NoError(t, err)
+	xmlData, err := os.ReadFile("../../../test/testdata/provider2.xml")
+	require.NoError(t, err)
+
+	bodies := map[string][]byte{
+		"/json":       jsonData,
+		"/xml":        xmlData,
+		"/padded-xml": append([]byte("\xef\xbb\xbf\n  "), xmlData...),
+		"/other-json": []byte(`{"items":[{"name":"not our schema"}]}`),
+		"/html":       []byte(`<!doctype html><html><body>hello</body></html>`),
+		"/empty-feed": []byte(`{"contents":[]}`),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := bodies[r.URL.Path]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+
+	r := New(httpclient.Config{Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ctx := context.Background()
+
+	for path, want := range map[string]domain.ProviderFormat{
+		"/json":       domain.ProviderFormatJSON,
+		"/xml":        domain.ProviderFormatXML,
+		"/padded-xml": domain.ProviderFormatXML,
+	} {
+		got, err := r.Detect(ctx, srv.URL+path)
+		require.NoError(t, err, path)
+		assert.Equal(t, want, got, path)
+	}
+
+	for _, path := range []string{"/other-json", "/html", "/empty-feed"} {
+		_, err := r.Detect(ctx, srv.URL+path)
+		assert.ErrorIs(t, err, domain.ErrFormatNotDetected, path)
+		assert.ErrorIs(t, err, domain.ErrInvalidInput, path)
+	}
+	_, err = r.Detect(ctx, srv.URL+"/missing")
+	assert.ErrorIs(t, err, domain.ErrProviderUnreachable)
+}

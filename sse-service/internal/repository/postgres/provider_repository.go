@@ -70,25 +70,77 @@ func (r *ProviderRepository) Create(ctx context.Context, p domain.Provider) (dom
 	return created, err
 }
 
-// Update applies the non-nil fields of patch.
+// Update applies the non-nil fields of patch in one transaction. A rename cascades to contents
+// through the foreign key and is applied to the provider's sync runs here.
 func (r *ProviderRepository) Update(ctx context.Context, id int64, patch domain.ProviderPatch) (domain.Provider, error) {
 	var format *string
 	if patch.Format != nil {
 		f := string(*patch.Format)
 		format = &f
 	}
-	rows, err := r.pool.Query(ctx, `
-		UPDATE providers SET
-			url        = COALESCE($2, url),
-			format     = COALESCE($3, format),
-			enabled    = COALESCE($4, enabled),
-			updated_at = now()
-		WHERE id = $1
-		RETURNING `+providerColumns, id, patch.URL, format, patch.Enabled)
+
+	var updated domain.Provider
+	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		var oldName string
+		if err := tx.QueryRow(ctx, `SELECT name FROM providers WHERE id = $1 FOR UPDATE`, id).Scan(&oldName); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ErrNotFound
+			}
+			return err
+		}
+
+		rows, err := tx.Query(ctx, `
+			UPDATE providers SET
+				name       = COALESCE($2, name),
+				url        = COALESCE($3, url),
+				format     = COALESCE($4, format),
+				enabled    = COALESCE($5, enabled),
+				updated_at = now()
+			WHERE id = $1
+			RETURNING `+providerColumns, id, patch.Name, patch.URL, format, patch.Enabled)
+		if err != nil {
+			return err
+		}
+		if updated, err = oneProvider(rows); err != nil {
+			return err
+		}
+
+		if updated.Name != oldName {
+			_, err = tx.Exec(ctx, `UPDATE sync_runs SET provider = $2 WHERE provider = $1`, oldName, updated.Name)
+		}
+		return err
+	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+		return domain.Provider{}, fmt.Errorf("%w: a provider named %q already exists", domain.ErrConflict, *patch.Name)
+	}
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.Provider{}, err
+	}
 	if err != nil {
 		return domain.Provider{}, fmt.Errorf("update provider: %w", err)
 	}
-	return oneProvider(rows)
+	return updated, nil
+}
+
+// Delete removes a provider together with its contents (cascading foreign key) and sync runs.
+func (r *ProviderRepository) Delete(ctx context.Context, id int64) error {
+	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		var name string
+		err := tx.QueryRow(ctx, `DELETE FROM providers WHERE id = $1 RETURNING name`, id).Scan(&name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM sync_runs WHERE provider = $1`, name)
+		return err
+	})
+	if err != nil && !errors.Is(err, domain.ErrNotFound) {
+		return fmt.Errorf("delete provider: %w", err)
+	}
+	return err
 }
 
 func oneProvider(rows pgx.Rows) (domain.Provider, error) {

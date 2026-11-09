@@ -198,6 +198,8 @@ func (r *ContentRepository) LatestSyncRuns(ctx context.Context) ([]domain.SyncRu
 	rows, err := r.pool.Query(ctx, `
 		SELECT DISTINCT ON (provider) provider, started_at, finished_at, status, fetched, upserted, COALESCE(error, '')
 		FROM sync_runs
+		-- a run recorded while its provider was being deleted must not resurface
+		WHERE provider IN (SELECT name FROM providers)
 		ORDER BY provider, started_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("latest sync runs: %w", err)
