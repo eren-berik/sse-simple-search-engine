@@ -225,6 +225,8 @@ Redis ikisi için de opsiyonel; ulaşılamazsa sistem çalışmaya devam eder (a
 
 Provider'lar sse-service'in `providers` tablosunda tutulur (`name`, `url`, `format`, `enabled`). Case'teki iki provider migration ile seed edilir. Admin, dashboard'dan ya da API'den yeni provider ekleyebilir, provider'ları etkinleştirip devre dışı bırakabilir ve tek tek ya da toplu sync başlatabilir. Bunlar için kod değişikliği ya da restart gerekmez: her sync, etkin provider'ları DB'den okur.
 
+**Devre dışı bırakma:** Devre dışı bir provider sync edilmez ve içerikleri arama sonuçlarında ve içerik detayında gösterilmez. İçerikler silinmez; provider tekrar etkinleştirildiğinde hemen geri gelir. Etkin/devre dışı değişikliği arama cache'ini anında geçersiz kılar.
+
 **Format = adapter.** `format` alanı payload'ı okuyacak adapter'ı seçer:
 
 | | `json` (provider1 şeması) | `xml` (provider2 şeması) |

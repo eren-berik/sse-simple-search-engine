@@ -62,7 +62,7 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	app.http = router.New(router.Deps{
 		Contents:  handler.NewContentHandler(searchSvc),
 		Sync:      handler.NewSyncHandler(app.ingest),
-		Providers: handler.NewProviderHandler(providers.NewService(providerRepo)),
+		Providers: handler.NewProviderHandler(providers.NewService(providerRepo, searchSvc, log)),
 		Verifier:  jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
 		// The cache and the identity service are optional for readiness: searches fall back to the
 		// database and already fetched signing keys keep verifying tokens.

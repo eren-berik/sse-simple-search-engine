@@ -74,3 +74,32 @@ func TestSearchByProvider(t *testing.T) {
 	combined := search(t, repo, domain.SearchQuery{Provider: "provider1", Keyword: "docker"})
 	assert.Equal(t, 0, combined.Total, "filters combine with the keyword")
 }
+
+func TestDisabledProviderContentIsHidden(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	providers := NewProviderRepository(pool)
+	seed(t, repo)
+	ctx := context.Background()
+
+	var id int64
+	require.NoError(t, pool.QueryRow(ctx, `SELECT id FROM contents WHERE provider = 'provider2' LIMIT 1`).Scan(&id))
+	set := func(enabled bool) {
+		_, err := providers.Update(ctx, 2, domain.ProviderPatch{Enabled: &enabled})
+		require.NoError(t, err)
+	}
+
+	set(false)
+	all := search(t, repo, domain.SearchQuery{PerPage: 100})
+	assert.Equal(t, 4, all.Total, "only provider1 contents remain")
+	for _, h := range all.Hits {
+		assert.Equal(t, "provider1", h.Content.Provider)
+	}
+	assert.Equal(t, 0, search(t, repo, domain.SearchQuery{Provider: "provider2"}).Total)
+	_, err := repo.GetByID(ctx, id)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+
+	set(true)
+	assert.Equal(t, 8, search(t, repo, domain.SearchQuery{PerPage: 100}).Total, "contents come back when re-enabled")
+	_, err = repo.GetByID(ctx, id)
+	assert.NoError(t, err)
+}

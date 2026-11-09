@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,11 +33,20 @@ func (f *fakeRepo) Update(_ context.Context, id int64, patch domain.ProviderPatc
 	return domain.Provider{ID: id}, nil
 }
 
+type countingInvalidator struct{ n int }
+
+func (c *countingInvalidator) Invalidate(context.Context) error { c.n++; return nil }
+
+func newService(repo Repository) (*Service, *countingInvalidator) {
+	inv := &countingInvalidator{}
+	return NewService(repo, inv, slog.New(slog.NewTextHandler(io.Discard, nil))), inv
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func TestCreate(t *testing.T) {
 	repo := &fakeRepo{}
-	svc := NewService(repo)
+	svc, _ := newService(repo)
 
 	p, err := svc.Create(context.Background(), CreateInput{Name: " My-Feed ", URL: " https://example.com/feed ", Format: "XML"})
 
@@ -49,7 +60,7 @@ func TestCreate(t *testing.T) {
 }
 
 func TestCreateValidation(t *testing.T) {
-	svc := NewService(&fakeRepo{})
+	svc, _ := newService(&fakeRepo{})
 
 	for name, in := range map[string]CreateInput{
 		"empty name":       {Name: "", URL: "https://x.io", Format: "json"},
@@ -67,13 +78,18 @@ func TestCreateValidation(t *testing.T) {
 
 func TestUpdate(t *testing.T) {
 	repo := &fakeRepo{}
-	svc := NewService(repo)
+	svc, inv := newService(repo)
 
 	_, err := svc.Update(context.Background(), 1, UpdateInput{Enabled: ptr(false), Format: ptr("JSON")})
 	require.NoError(t, err)
 	assert.Nil(t, repo.patch.URL)
 	assert.Equal(t, domain.ProviderFormatJSON, *repo.patch.Format)
 	assert.False(t, *repo.patch.Enabled)
+	assert.Equal(t, 1, inv.n, "toggling a provider invalidates cached searches")
+
+	_, err = svc.Update(context.Background(), 1, UpdateInput{URL: ptr("https://y.io")})
+	require.NoError(t, err)
+	assert.Equal(t, 1, inv.n, "a URL change does not affect search results until the next sync")
 
 	_, err = svc.Update(context.Background(), 1, UpdateInput{URL: ptr("not a url")})
 	assert.ErrorIs(t, err, domain.ErrInvalidInput)

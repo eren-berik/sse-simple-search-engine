@@ -16,6 +16,9 @@ import (
 const contentColumns = `id, provider, external_id, title, type, views, likes, duration_sec,
 	reading_time, reactions, comments, tags, published_at, score, score_updated_at, raw_payload`
 
+// enabledProviderCond restricts queries to contents whose provider is enabled.
+const enabledProviderCond = `EXISTS (SELECT 1 FROM providers p WHERE p.name = contents.provider AND p.enabled)`
+
 // ContentRepository stores content items and serves searches using PostgreSQL full-text search.
 type ContentRepository struct {
 	pool *pgxpool.Pool
@@ -109,7 +112,8 @@ func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.T
 // relevance is ts_rank plus trigram similarity of the title.
 func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, error) {
 	args := pgx.NamedArgs{"limit": q.PerPage, "offset": q.Offset()}
-	var conds []string
+	// Contents of disabled providers stay stored but are hidden until the provider is enabled again.
+	conds := []string{enabledProviderCond}
 	relevance := "0::float8"
 
 	if q.Keyword != "" {
@@ -127,10 +131,7 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		conds = append(conds, `provider = @provider`)
 	}
 
-	where := ""
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
-	}
+	where := "WHERE " + strings.Join(conds, " AND ")
 	orderBy := "score DESC, id ASC"
 	if q.Sort == domain.SortRelevance {
 		orderBy = "relevance DESC, score DESC, id ASC"
@@ -164,9 +165,9 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 	return result, nil
 }
 
-// GetByID returns a single content item or domain.ErrNotFound.
+// GetByID returns a single content item, or domain.ErrNotFound if it does not exist or its provider is disabled.
 func (r *ContentRepository) GetByID(ctx context.Context, id int64) (domain.Content, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+contentColumns+` FROM contents WHERE id = $1`, id)
+	rows, err := r.pool.Query(ctx, `SELECT `+contentColumns+` FROM contents WHERE id = $1 AND `+enabledProviderCond, id)
 	if err != nil {
 		return domain.Content{}, fmt.Errorf("get content: %w", err)
 	}
