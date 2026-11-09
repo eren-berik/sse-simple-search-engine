@@ -263,7 +263,7 @@ func TestSyncConflict(t *testing.T) {
 func TestPublicEndpoints(t *testing.T) {
 	app := newApp(t, nil, fakeSyncer{})
 
-	for _, path := range []string{"/healthz", "/readyz", "/", "/openapi.yaml"} {
+	for _, path := range []string{"/healthz", "/readyz"} {
 		resp, _ := app.call(http.MethodGet, path, "", "")
 		assert.Equal(t, http.StatusOK, resp.StatusCode, path)
 	}

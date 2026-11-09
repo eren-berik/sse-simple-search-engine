@@ -3,14 +3,10 @@ package router
 
 import (
 	"log/slog"
-	"net/http"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/filesystem"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/handler"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/web"
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/openapi"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/jwtauth"
 )
@@ -25,7 +21,8 @@ type Deps struct {
 }
 
 // New builds the API. Every /api/v1 route requires a valid access token; viewers can read
-// and filter, admins can additionally manage providers and trigger syncs.
+// and filter, admins can additionally manage providers and trigger syncs. The service is
+// API-only: the dashboard and docs are served by the gateway.
 func New(d Deps) *fiber.App {
 	app := httpx.NewApp(httpx.AppConfig{
 		Name:              "sse-service",
@@ -48,17 +45,6 @@ func New(d Deps) *fiber.App {
 	v1.Patch("/providers/:id", admin, d.Providers.Update)
 	v1.Post("/providers/:id/sync", admin, d.Sync.TriggerProvider)
 	v1.Post("/sync", admin, d.Sync.Trigger)
-
-	app.Get("/openapi.yaml", func(c *fiber.Ctx) error {
-		c.Type("yaml")
-		return c.Send(openapi.Spec)
-	})
-	app.Get("/docs", func(c *fiber.Ctx) error { return c.Redirect("/docs.html") })
-	app.Use("/", filesystem.New(filesystem.Config{
-		Root:   http.FS(web.Static),
-		Index:  "index.html",
-		MaxAge: 300,
-	}))
 
 	return app
 }

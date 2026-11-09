@@ -1,4 +1,4 @@
-// Package web embeds the dashboard and API docs pages so they ship inside the binary.
+// Package web embeds the dashboard and API docs pages so they ship inside the gateway binary.
 package web
 
 import (
