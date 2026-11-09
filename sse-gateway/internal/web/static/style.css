@@ -194,10 +194,15 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
 .checkbox { flex-direction: row !important; align-items: center; gap: 6px !important; align-self: flex-end; padding-bottom: 8px; }
 .badge.on { color: var(--accent); }
 .badge.off { color: var(--off); }
-.actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: nowrap; }
+button.icon-btn { display: inline-grid; place-items: center; width: 30px; height: 30px; padding: 0; }
+button.icon-btn:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+button.icon-btn.danger:not(:disabled):hover { border-color: var(--error-text); color: var(--error-text); }
+button.icon-btn.busy svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { button.icon-btn.busy svg { animation: none; } }
 #provider-rows tr { cursor: default; }
 .url { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
-button.small { padding: 4px 10px; font-size: 13px; }
 button.danger { color: var(--error-text); border-color: color-mix(in srgb, var(--error-text) 40%, var(--border)); }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
 #provider-edit h2 { margin: 0; font-size: 18px; }
