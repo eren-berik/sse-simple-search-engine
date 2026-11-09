@@ -1,0 +1,547 @@
+openapi: 3.0.3
+info:
+  title: Content Search API
+  version: 2.0.0
+  description: |
+    Public API exposed by **sse-gateway**. The gateway forwards each call to the service that owns it:
+
+    | Path | Service |
+    |---|---|
+    | `/api/v1/auth/*` | iam-service (users, tokens) |
+    | `/api/v1/contents`, `/api/v1/providers`, `/api/v1/sync` | sse-service (search, providers, sync) |
+
+    **Authentication:** register or log in to get an `access_token` (JWT, RS256, 15 min) and a
+    `refresh_token` (opaque, rotated on every use). Send the access token as `Authorization: Bearer <token>`.
+    When it expires, exchange the refresh token at `/api/v1/auth/refresh`. Reusing an already rotated
+    refresh token revokes the whole session.
+
+    **Roles:** `viewer` can search, filter and read providers and sync runs; `admin` can additionally
+    create and update providers and trigger syncs.
+
+    **Scoring:** `final = base * type_coefficient + recency + engagement`
+
+    | | Video | Text |
+    |---|---|---|
+    | base | `views/1000 + likes/100` | `reading_time + reactions/50` |
+    | type_coefficient | 1.5 | 1.0 |
+    | engagement | `(likes/views) * 10` | `(reactions/reading_time) * 5` |
+
+    recency: within 7 days +5, 30 days +3, 90 days +1, otherwise 0.
+
+    **Rate limits:** per client IP, 100 requests/min on `/api/*` and 10 requests/min on login, register and refresh.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: auth
+  - name: contents
+  - name: providers
+  - name: sync
+  - name: health
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/auth/register:
+    post:
+      tags: [auth]
+      summary: Register a user and start a session
+      description: The role defaults to `viewer`. Any role can be chosen at registration (demo policy).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$', example: alice, description: Stored lowercase }
+                password: { type: string, minLength: 8, maxLength: 72, example: s3cret-pass }
+                role: { $ref: '#/components/schemas/Role' }
+      responses:
+        '201':
+          description: Registered; tokens issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Username already taken (`username_taken`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: Log in and start a session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, example: alice }
+                password: { type: string, example: s3cret-pass }
+      responses:
+        '200':
+          description: Tokens issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '401':
+          description: Invalid username or password (`invalid_credentials`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate the refresh token and get a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: New token pair
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '401':
+          description: Unknown, expired, revoked or reused refresh token (`invalid_refresh_token`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke the session of a refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '204': { description: Logged out (idempotent) }
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      summary: Current user
+      responses:
+        '200':
+          description: The authenticated user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/contents:
+    get:
+      tags: [contents]
+      summary: Search contents
+      description: |
+        Keyword search over titles and tags (full-text plus substring match on the title).
+        Without `sort`, results are ordered by relevance when `q` is set and by popularity otherwise;
+        relevance without a keyword falls back to popularity (`meta.sort` reports the order used).
+        Responses are cached; `X-Cache` reports `HIT`, `MISS` or `BYPASS`.
+      parameters:
+        - { name: q, in: query, schema: { type: string, maxLength: 200 }, example: go, description: 'Supports websearch syntax such as "exact phrase" and -exclude.' }
+        - { name: type, in: query, schema: { type: string, enum: [video, text] } }
+        - { name: provider, in: query, schema: { type: string }, description: Provider name }
+        - { name: sort, in: query, schema: { type: string, enum: [popularity, relevance] } }
+        - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: A page of contents
+          headers:
+            X-Cache:
+              schema: { type: string, enum: [HIT, MISS, BYPASS] }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Content' }
+                  meta: { $ref: '#/components/schemas/ListMeta' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/contents/{id}:
+    get:
+      tags: [contents]
+      summary: Get a content item with its score breakdown
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+      responses:
+        '200':
+          description: The content item
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/ContentDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/providers:
+    get:
+      tags: [providers]
+      summary: List providers
+      responses:
+        '200':
+          description: All configured providers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Provider' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [providers]
+      summary: Add a provider (admin)
+      description: |
+        The provider's payload must follow the schema of a supported format (`json` like provider1, `xml` like provider2).
+        When `format` is omitted or `auto`, the URL is fetched and the format whose adapter reads at least one
+        valid item from it is used; if none does, the request fails with `400 invalid_input`.
+        Its content is fetched on the next sync, or immediately with `POST /api/v1/providers/{id}/sync`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, url]
+              properties:
+                name: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,49}$', example: my-feed }
+                url: { type: string, format: uri, example: 'https://example.com/feed.json' }
+                format: { $ref: '#/components/schemas/ProviderFormatInput' }
+                enabled: { type: boolean, default: true }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Provider' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Name already used (`conflict`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /api/v1/providers/{id}:
+    patch:
+      tags: [providers]
+      summary: Update a provider (admin)
+      description: |
+        Only the given fields change. Renaming moves the provider's contents and sync history to the new name.
+        When `url` changes and `format` is omitted (or `auto`), the format is detected again from the new URL.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,49}$' }
+                url: { type: string, format: uri }
+                format: { $ref: '#/components/schemas/ProviderFormatInput' }
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Provider' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Name already used (`conflict`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [providers]
+      summary: Delete a provider and its contents (admin)
+      description: Permanently removes the provider, every content item ingested from it and its sync history.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '204': { description: Deleted }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/providers/{id}/sync:
+    post:
+      tags: [sync]
+      summary: Sync one provider now (admin)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '200': { $ref: '#/components/responses/SyncReport' }
+        '400':
+          description: Provider is disabled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/SyncInProgress' }
+
+  /api/v1/sync:
+    post:
+      tags: [sync]
+      summary: Sync every enabled provider now (admin)
+      description: Providers are also synced automatically on startup and every `SYNC_INTERVAL`.
+      responses:
+        '200': { $ref: '#/components/responses/SyncReport' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/SyncInProgress' }
+
+  /api/v1/sync/runs:
+    get:
+      tags: [sync]
+      summary: Latest sync run per provider
+      responses:
+        '200':
+          description: Latest runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SyncRun' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Gateway liveness
+      security: []
+      responses:
+        '200': { description: Process is up }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Gateway readiness
+      description: Fails when iam-service or sse-service is unreachable; a Redis outage only reports `degraded`.
+      security: []
+      responses:
+        '200': { description: Ready (ok or degraded) }
+        '503': { description: A backing service is unavailable }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Role:
+      type: string
+      enum: [viewer, admin]
+      default: viewer
+
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        created_at: { type: string, format: date-time }
+
+    SessionResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            user: { $ref: '#/components/schemas/User' }
+            token_type: { type: string, example: Bearer }
+            access_token: { type: string, description: 'JWT (RS256). Claims: sub, username, role, iss, aud, exp' }
+            expires_in: { type: integer, example: 900, description: Seconds }
+            refresh_token: { type: string }
+            refresh_expires_in: { type: integer, example: 604800, description: Seconds }
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+
+    ProviderFormat:
+      type: string
+      enum: [json, xml]
+
+    ProviderFormatInput:
+      type: string
+      enum: [auto, json, xml]
+      default: auto
+      description: '`auto` (or omitted) detects the format from the provider URL'
+
+    Provider:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, example: provider1 }
+        url: { type: string, format: uri }
+        format: { $ref: '#/components/schemas/ProviderFormat' }
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Metrics:
+      type: object
+      description: Video items carry views/likes/duration_sec; text items carry reading_time/reactions/comments. Zero values are omitted.
+      properties:
+        views: { type: integer }
+        likes: { type: integer }
+        duration_sec: { type: integer }
+        reading_time: { type: integer, description: minutes }
+        reactions: { type: integer }
+        comments: { type: integer }
+
+    Content:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        provider: { type: string, example: provider1 }
+        external_id: { type: string, example: v1 }
+        title: { type: string, example: Go Programming Tutorial }
+        type: { type: string, enum: [video, text] }
+        score: { type: number, example: 41.3 }
+        relevance: { type: number, description: Present only when sorted by relevance }
+        metrics: { $ref: '#/components/schemas/Metrics' }
+        tags:
+          type: array
+          items: { type: string }
+        published_at: { type: string, format: date-time }
+
+    ContentDetail:
+      allOf:
+        - $ref: '#/components/schemas/Content'
+        - type: object
+          properties:
+            score_breakdown:
+              type: object
+              properties:
+                base: { type: number }
+                type_coefficient: { type: number }
+                recency: { type: number }
+                engagement: { type: number }
+                final: { type: number }
+
+    ListMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+        sort: { type: string, enum: [popularity, relevance] }
+
+    SyncRun:
+      type: object
+      properties:
+        provider: { type: string }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: string, format: date-time }
+        status: { type: string, enum: [success, failed] }
+        fetched: { type: integer }
+        upserted: { type: integer }
+        error: { type: string }
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: invalid_input }
+            message: { type: string }
+
+  responses:
+    BadRequest:
+      description: Invalid parameters (`invalid_input`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing, invalid or expired access token (`unauthorized`, `invalid_token`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The user's role does not allow this action (`forbidden`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests (`rate_limited`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SyncInProgress:
+      description: Another sync is running (`sync_in_progress`)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    SyncReport:
+      description: Sync report
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  started_at: { type: string, format: date-time }
+                  finished_at: { type: string, format: date-time }
+                  rescored: { type: integer }
+                  runs:
+                    type: array
+                    items: { $ref: '#/components/schemas/SyncRun' }

@@ -3,3 +3,7 @@
 coverage.out
 *.test
 .DS_Store
+go.work.sum
+deploy/keys/*
+!deploy/keys/.gitkeep
+.vscode/

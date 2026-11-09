@@ -1,18 +1,44 @@
 services:
-  app:
-    build: .
+  sse-gateway:
+    build: ./sse-gateway
     ports:
       - "${APP_PORT:-8080}:8080"
     environment:
+      IAM_URL: http://iam-service:8080
+      SSE_URL: http://sse-service:8080
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The services below are only reachable through the gateway on the internal network.
+  sse-service:
+    build: ./sse-service
+    environment:
       DATABASE_URL: postgres://app:app@postgres:5432/contents?sslmode=disable
       REDIS_URL: redis://redis:6379/0
-      ADMIN_API_KEY: ${ADMIN_API_KEY:-dev-admin-key}
+      JWKS_URL: http://iam-service:8080/.well-known/jwks.json
       SYNC_INTERVAL: ${SYNC_INTERVAL:-10m}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  iam-service:
+    build: ./iam-service
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/iam?sslmode=disable
+      JWT_PRIVATE_KEY_FILE: ${JWT_PRIVATE_KEY_FILE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ./deploy/keys:/keys:ro
+    depends_on:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
@@ -26,6 +52,7 @@ services:
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U app -d contents"]
       interval: 2s
