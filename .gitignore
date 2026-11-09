@@ -6,3 +6,4 @@ coverage.out
 go.work.sum
 deploy/keys/*
 !deploy/keys/.gitkeep
+.vscode/
