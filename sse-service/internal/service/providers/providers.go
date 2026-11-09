@@ -3,6 +3,7 @@ package providers
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
@@ -29,12 +30,19 @@ type UpdateInput struct {
 	Enabled *bool
 }
 
-type Service struct {
-	repo Repository
+// Invalidator drops derived caches; enabling or disabling a provider changes search results.
+type Invalidator interface {
+	Invalidate(ctx context.Context) error
 }
 
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+type Service struct {
+	repo        Repository
+	invalidator Invalidator
+	log         *slog.Logger
+}
+
+func NewService(repo Repository, inv Invalidator, log *slog.Logger) *Service {
+	return &Service{repo: repo, invalidator: inv, log: log}
 }
 
 func (s *Service) List(ctx context.Context) ([]domain.Provider, error) {
@@ -84,5 +92,15 @@ func (s *Service) Update(ctx context.Context, id int64, in UpdateInput) (domain.
 		patch.Format = &f
 	}
 	patch.Enabled = in.Enabled
-	return s.repo.Update(ctx, id, patch)
+	p, err := s.repo.Update(ctx, id, patch)
+	if err != nil {
+		return domain.Provider{}, err
+	}
+	if in.Enabled != nil {
+		// Search results hide disabled providers, so cached pages are stale now.
+		if err := s.invalidator.Invalidate(ctx); err != nil {
+			s.log.WarnContext(ctx, "cache invalidation failed; entries will expire via TTL", "error", err)
+		}
+	}
+	return p, nil
 }

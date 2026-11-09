@@ -296,8 +296,9 @@
       const select = $("provider");
       const current = select.value;
       select.replaceChildren(new Option("Tümü", ""));
-      for (const p of data.data) select.append(new Option(p.name, p.name));
-      select.value = current;
+      // Disabled providers' contents are hidden, so they are not offered as a filter.
+      for (const p of data.data.filter((p) => p.enabled)) select.append(new Option(p.name, p.name));
+      select.value = [...select.options].some((o) => o.value === current) ? current : "";
     } catch {
       /* the filter stays limited to "all" */
     }
@@ -417,7 +418,12 @@
     button.disabled = true;
     try {
       await api(`/api/v1/providers/${p.id}`, { method: "PATCH", body: { enabled: !p.enabled } });
+      toast(p.enabled
+        ? `"${p.name}" devre dışı bırakıldı; içerikleri aramada gösterilmeyecek.`
+        : `"${p.name}" etkinleştirildi.`);
       await loadProviders();
+      await loadProviderOptions();
+      loadContents();
     } catch (err) {
       showError($("error"), err.message);
       button.disabled = false;
