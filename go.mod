@@ -3,6 +3,7 @@ module github.com/eren-berik/sse-simple-search-engine
 go 1.26.0
 
 require (
+	github.com/caarlos0/env/v11 v11.4.2
 	github.com/gofiber/fiber/v2 v2.52.16
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/pressly/goose/v3 v3.29.0
