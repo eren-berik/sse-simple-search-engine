@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/middleware"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/proxy"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth/jwtauthtest"
@@ -52,6 +53,7 @@ type options struct {
 	iam, sse                      string
 	ipLimit, authLimit, userLimit int
 	syncLimit                     int
+	sseGuard                      proxy.Guard
 }
 
 func newApp(t *testing.T, o options) *fiber.App {
@@ -66,6 +68,7 @@ func newApp(t *testing.T, o options) *fiber.App {
 		IAMURL: o.iam, SSEURL: o.sse, UpstreamTimeout: 2 * time.Second,
 		Ready: httpx.Ready(nil, nil), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Verifier: jwtauthtest.New(t).Verifier(),
+		SSEGuard: o.sseGuard,
 		RateLimits: middleware.RateLimits{
 			IP:   middleware.Limit{Max: orDefault(o.ipLimit), Window: time.Minute},
 			Auth: middleware.Limit{Max: orDefault(o.authLimit), Window: time.Minute},
@@ -212,6 +215,22 @@ func TestUpstreamDown(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	assert.Equal(t, "bad_gateway", body["error"].(map[string]any)["code"])
+}
+
+func TestGuardsProtectEachService(t *testing.T) {
+	iam, sse := echoUpstream(t, "iam"), echoUpstream(t, "sse")
+	app := newApp(t, options{iam: iam, sse: sse, sseGuard: func(*fiber.Ctx, proxy.Call) error {
+		return middleware.ErrCircuitOpen
+	}})
+
+	resp, rec, body := send(t, app, withToken(t, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil), jwtauth.RoleViewer))
+	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	assert.Equal(t, "upstream_unavailable", body["error"].(map[string]any)["code"])
+	assert.Empty(t, rec.Service)
+
+	resp, rec, _ = send(t, app, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil))
+	assert.Equal(t, http.StatusTeapot, resp.StatusCode, "an open circuit to one service does not affect the other")
+	assert.Equal(t, "iam", rec.Service)
 }
 
 func TestAuthRateLimit(t *testing.T) {
