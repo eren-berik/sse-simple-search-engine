@@ -1,0 +1,234 @@
+//go:build integration
+
+package postgres
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/url"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/eren-berik/sse-simple-search-engine/internal/domain"
+	"github.com/eren-berik/sse-simple-search-engine/internal/provider/jsonprovider"
+	"github.com/eren-berik/sse-simple-search-engine/internal/provider/xmlprovider"
+	"github.com/eren-berik/sse-simple-search-engine/internal/scoring"
+)
+
+// newTestRepo creates a throwaway database on the server in TEST_DATABASE_URL, migrates it
+// and drops it when the test ends, so tests never touch application data.
+func newTestRepo(t *testing.T) (*ContentRepository, *pgxpool.Pool) {
+	t.Helper()
+	base := os.Getenv("TEST_DATABASE_URL")
+	if base == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+
+	admin, err := pgx.Connect(ctx, base)
+	require.NoError(t, err)
+	t.Cleanup(func() { admin.Close(context.Background()) })
+
+	name := fmt.Sprintf("test_%d", time.Now().UnixNano())
+	_, err = admin.Exec(ctx, "CREATE DATABASE "+name)
+	require.NoError(t, err)
+
+	u, err := url.Parse(base)
+	require.NoError(t, err)
+	u.Path = "/" + name
+
+	pool, err := Connect(ctx, u.String())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		pool.Close()
+		_, _ = admin.Exec(context.Background(), "DROP DATABASE "+name+" WITH (FORCE)")
+	})
+
+	require.NoError(t, Migrate(ctx, pool))
+	return NewContentRepository(pool), pool
+}
+
+// seed stores both provider fixtures, scored as of fixedNow.
+func seed(t *testing.T, repo *ContentRepository) {
+	t.Helper()
+	scorer := scoring.New(scoring.DefaultConfig(), func() time.Time { return fixedNow })
+
+	jsonData, err := os.ReadFile("../../../test/testdata/provider1.json")
+	require.NoError(t, err)
+	xmlData, err := os.ReadFile("../../../test/testdata/provider2.xml")
+	require.NoError(t, err)
+
+	p1, _, err := jsonprovider.Parse("provider1", jsonData)
+	require.NoError(t, err)
+	p2, _, err := xmlprovider.Parse("provider2", xmlData)
+	require.NoError(t, err)
+
+	all := append(p1, p2...)
+	for i := range all {
+		all[i].Score = scorer.Final(all[i])
+		all[i].ScoreUpdatedAt = fixedNow
+	}
+	n, err := repo.UpsertContents(context.Background(), all)
+	require.NoError(t, err)
+	require.Equal(t, 8, n)
+}
+
+var fixedNow = time.Date(2024, 3, 16, 0, 0, 0, 0, time.UTC)
+
+func titles(res domain.SearchResult) []string {
+	out := make([]string, 0, len(res.Hits))
+	for _, h := range res.Hits {
+		out = append(out, h.Content.Title)
+	}
+	return out
+}
+
+func search(t *testing.T, repo *ContentRepository, q domain.SearchQuery) domain.SearchResult {
+	t.Helper()
+	require.NoError(t, q.Normalize())
+	res, err := repo.Search(context.Background(), q)
+	require.NoError(t, err)
+	return res
+}
+
+func TestUpsertIsIdempotentAndKeysByProvider(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	ctx := context.Background()
+	seed(t, repo)
+	seed(t, repo) // second run must update, not duplicate
+
+	var count int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM contents`).Scan(&count))
+	assert.Equal(t, 8, count, "v1..v3 exist in both providers and must be stored separately")
+
+	// An update changes metrics in place.
+	_, err := repo.UpsertContents(ctx, []domain.Content{{
+		Provider: "provider1", ExternalID: "v1", Title: "Go Programming Tutorial (updated)", Type: domain.ContentTypeVideo,
+		Metrics: domain.Metrics{Views: 1}, PublishedAt: fixedNow, Score: 1, ScoreUpdatedAt: fixedNow,
+	}})
+	require.NoError(t, err)
+	var title string
+	var views int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT title, views FROM contents WHERE provider = 'provider1' AND external_id = 'v1'`).Scan(&title, &views))
+	assert.Equal(t, "Go Programming Tutorial (updated)", title)
+	assert.Equal(t, int64(1), views)
+}
+
+func TestSearchPopularityOrderAndPagination(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	all := search(t, repo, domain.SearchQuery{PerPage: 100})
+	require.Equal(t, 8, all.Total)
+	for i := 1; i < len(all.Hits); i++ {
+		assert.GreaterOrEqual(t, all.Hits[i-1].Content.Score, all.Hits[i].Content.Score, "sorted by score desc")
+	}
+	assert.Equal(t, "Clean Architecture in Go", all.Hits[0].Content.Title, "the article's engagement score dominates")
+
+	page := search(t, repo, domain.SearchQuery{Page: 3, PerPage: 3})
+	assert.Equal(t, 8, page.Total)
+	assert.Len(t, page.Hits, 2)
+	assert.Equal(t, 3, page.TotalPages())
+
+	beyond := search(t, repo, domain.SearchQuery{Page: 10, PerPage: 3})
+	assert.Empty(t, beyond.Hits)
+	assert.Equal(t, 8, beyond.Total)
+}
+
+func TestSearchKeywordAndType(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	goRes := search(t, repo, domain.SearchQuery{Keyword: "go"})
+	assert.Equal(t, domain.SortRelevance, goRes.Sort)
+	assert.ElementsMatch(t, []string{
+		"Go Programming Tutorial", "Advanced Go Concurrency Patterns", "Building RESTful APIs with Go",
+		"Go Testing Best Practices", "Clean Architecture in Go",
+	}, titles(goRes))
+	for i := 1; i < len(goRes.Hits); i++ {
+		assert.GreaterOrEqual(t, goRes.Hits[i-1].Relevance, goRes.Hits[i].Relevance, "sorted by relevance desc")
+	}
+
+	text := search(t, repo, domain.SearchQuery{Keyword: "go", Type: domain.ContentTypeText})
+	assert.Equal(t, []string{"Clean Architecture in Go"}, titles(text))
+
+	byTag := search(t, repo, domain.SearchQuery{Keyword: "devops"})
+	assert.Len(t, byTag.Hits, 3, "tags are searchable")
+
+	partial := search(t, repo, domain.SearchQuery{Keyword: "kubern"})
+	assert.Equal(t, []string{"Kubernetes for Beginners"}, titles(partial), "substring match on title")
+
+	wildcard := search(t, repo, domain.SearchQuery{Keyword: "%"})
+	assert.Empty(t, wildcard.Hits, "LIKE wildcards in user input are escaped")
+
+	none := search(t, repo, domain.SearchQuery{Keyword: "rust"})
+	assert.Equal(t, 0, none.Total)
+}
+
+func TestGetByID(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	seed(t, repo)
+	ctx := context.Background()
+
+	var id int64
+	require.NoError(t, pool.QueryRow(ctx, `SELECT id FROM contents WHERE provider = 'provider2' AND external_id = 'a1'`).Scan(&id))
+
+	c, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, "Clean Architecture in Go", c.Title)
+	assert.Equal(t, domain.ContentTypeText, c.Type)
+	assert.Equal(t, domain.Metrics{ReadingTime: 8, Reactions: 450, Comments: 25}, c.Metrics)
+	assert.Equal(t, []string{"programming", "architecture"}, c.Tags)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(c.RawPayload, &raw))
+	assert.Equal(t, "Clean Architecture in Go", raw["headline"], "original provider payload is preserved")
+
+	_, err = repo.GetByID(ctx, 999999)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestRecalculateScoresOnlyTouchesStaleRows(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	seed(t, repo)
+	ctx := context.Background()
+
+	n, err := repo.RecalculateScores(ctx, fixedNow, func(domain.Content) float64 { return 0 })
+	require.NoError(t, err)
+	assert.Equal(t, 0, n, "rows scored at fixedNow are not stale")
+
+	n, err = repo.RecalculateScores(ctx, fixedNow.Add(time.Second), func(domain.Content) float64 { return 42 })
+	require.NoError(t, err)
+	assert.Equal(t, 8, n)
+
+	var distinct int
+	require.NoError(t, pool.QueryRow(ctx, `SELECT count(DISTINCT score) FROM contents WHERE score = 42`).Scan(&distinct))
+	assert.Equal(t, 1, distinct)
+}
+
+func TestSyncRuns(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	ctx := context.Background()
+
+	older := domain.SyncRun{Provider: "provider1", StartedAt: fixedNow, FinishedAt: fixedNow, Status: domain.SyncStatusFailed, Error: "timeout"}
+	newer := domain.SyncRun{Provider: "provider1", StartedAt: fixedNow.Add(time.Hour), FinishedAt: fixedNow.Add(time.Hour), Status: domain.SyncStatusSuccess, Fetched: 4, Upserted: 4}
+	other := domain.SyncRun{Provider: "provider2", StartedAt: fixedNow, FinishedAt: fixedNow, Status: domain.SyncStatusSuccess, Fetched: 4, Upserted: 4}
+	for _, r := range []domain.SyncRun{older, newer, other} {
+		require.NoError(t, repo.RecordSyncRun(ctx, r))
+	}
+
+	runs, err := repo.LatestSyncRuns(ctx)
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	assert.Equal(t, "provider1", runs[0].Provider)
+	assert.Equal(t, domain.SyncStatusSuccess, runs[0].Status)
+	assert.Empty(t, runs[0].Error)
+	assert.Equal(t, "provider2", runs[1].Provider)
+}
