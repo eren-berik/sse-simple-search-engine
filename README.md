@@ -159,7 +159,7 @@ Her serviste aynı katmanlı yapı kullanılır: handler → service → reposit
 |---|:-:|:-:|
 | İçerik arama, filtreleme, detay (`GET /contents`, `/contents/{id}`) | ✓ | ✓ |
 | Provider listesi, son sync durumları (`GET /providers`, `/sync/runs`) | ✓ | ✓ |
-| Provider ekleme / güncelleme (`POST /providers`, `PATCH /providers/{id}`) | | ✓ |
+| Provider ekleme / düzenleme / silme (`POST /providers`, `PATCH`/`DELETE /providers/{id}`) | | ✓ |
 | Sync tetikleme (`POST /sync`, `POST /providers/{id}/sync`) | | ✓ |
 
 **Rol tipi:** Go'da string tabanlı bir enum (`type Role string`, sabitler `RoleAdmin`/`RoleViewer`), veritabanında `TEXT` ve `CHECK (role IN ('admin','viewer'))` olarak tutuluyor.
@@ -223,7 +223,11 @@ Redis ikisi için de opsiyonel; ulaşılamazsa sistem çalışmaya devam eder (a
 
 ## Provider Entegrasyonu
 
-Provider'lar sse-service'in `providers` tablosunda tutulur (`name`, `url`, `format`, `enabled`). Case'teki iki provider migration ile seed edilir. Admin, dashboard'dan ya da API'den yeni provider ekleyebilir, provider'ları etkinleştirip devre dışı bırakabilir ve tek tek ya da toplu sync başlatabilir. Bunlar için kod değişikliği ya da restart gerekmez: her sync, etkin provider'ları DB'den okur.
+Provider'lar sse-service'in `providers` tablosunda tutulur (`name`, `url`, `format`, `enabled`). Case'teki iki provider migration ile seed edilir. Admin, dashboard'dan ya da API'den şunları yapabilir: provider ekleme, ad/URL/format düzenleme, etkinleştirme/devre dışı bırakma, silme, tek tek ya da toplu sync. Bunlar için kod değişikliği ya da restart gerekmez: her sync, etkin provider'ları DB'den okur.
+
+**Format algılama:** Format verilmezse (ya da `auto` seçilirse) URL'den veri çekilir. Önce içeriğin ilk karakterine bakılır (`{`/`[` JSON, `<` XML); bu tahmin edilen formatın önce denenmesini sağlar. Ardından format, ilgili adapter en az bir geçerli içerik okuyabildiği takdirde kabul edilir. Yani "JSON'a benziyor" yetmez, şemaya da uymalıdır. Hiçbir adapter okuyamıyorsa (ör. bir HTML sayfası ya da farklı şemada bir JSON) istek `400` ile reddedilir. Düzenlemede URL değişir ve format açıkça verilmezse format yeniden algılanır.
+
+**Ad değiştirme ve silme:** İçerikler provider'a adıyla bağlı (`ON UPDATE CASCADE ON DELETE CASCADE`). Ad değişince içerikler ve sync geçmişi tek bir transaction'da yeni ada taşınır. Provider silindiğinde ona ait içerikler ve sync geçmişi de silinir; dashboard bu yüzden silmeden önce onay ister. Her iki işlem de arama cache'ini anında geçersiz kılar.
 
 **Devre dışı bırakma:** Devre dışı bir provider sync edilmez ve içerikleri arama sonuçlarında ve içerik detayında gösterilmez. İçerikler silinmez; provider tekrar etkinleştirildiğinde hemen geri gelir. Etkin/devre dışı değişikliği arama cache'ini anında geçersiz kılar.
 
@@ -388,7 +392,6 @@ Her servis environment variable ile yapılandırılır. Compose'un okuduğu değ
 - **Serbest rol seçimi:** Yukarıda anlatıldığı gibi demo amaçlı. Gerçek bir sistemde admin yetkisi ayrı bir kanaldan verilmeli.
 - **Refresh token'ın saklandığı yer:** Dashboard'da `HttpOnly` cookie'ye taşınabilir.
 - **Kullanıcı yönetimi:** Rol değiştirme, kullanıcı silme ve şifre sıfırlama endpoint'leri yok. Süresi dolmuş refresh token'lar için periyodik bir temizlik job'ı eklenebilir.
-- **Provider silme:** İçerikler provider'a foreign key ile bağlı olduğu için silme yerine devre dışı bırakma sunuluyor.
 - **Provider sayfalama:** Mock yanıtlar statik olduğu için tek sayfa çekiliyor.
 - **Ölçeklenme:**
   - Birden fazla sse-service instance'ında periyodik sync'in tek kopyada çalışması için Postgres advisory lock kullanılabilir.
