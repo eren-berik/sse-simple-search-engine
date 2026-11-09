@@ -14,6 +14,7 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/config"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
 )
 
 // application holds the wired components and the resources that must be released on shutdown.
@@ -45,9 +46,11 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		"iam-service": upstreamCheck(client, cfg.IAMURL),
 		"sse-service": upstreamCheck(client, cfg.SSEURL),
 	}
-	var optional map[string]httpx.Check
+	// Already fetched signing keys keep verifying tokens while the key set is unreachable.
+	keys := jwtauth.NewRemoteKeySource(cfg.JWKSURL, 5*time.Second)
+	optional := map[string]httpx.Check{"jwks": keys.Ping}
 	if app.redis != nil {
-		optional = map[string]httpx.Check{"redis": func(ctx context.Context) error { return app.redis.Ping(ctx).Err() }}
+		optional["redis"] = func(ctx context.Context) error { return app.redis.Ping(ctx).Err() }
 	}
 
 	app.http = router.New(router.Deps{
@@ -56,6 +59,7 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		UpstreamTimeout:     cfg.UpstreamTimeout,
 		Ready:               httpx.Ready(required, optional),
 		Log:                 log,
+		Verifier:            jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
 		RateLimitMax:        cfg.RateLimitMax,
 		RateLimitWindow:     cfg.RateLimitWindow,
 		AuthRateLimitMax:    cfg.AuthRateLimitMax,

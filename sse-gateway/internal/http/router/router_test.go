@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth/jwtauthtest"
 )
 
 // recordedRequest is what an upstream saw.
@@ -58,9 +60,17 @@ func newApp(t *testing.T, o options) *fiber.App {
 	return New(Deps{
 		IAMURL: o.iam, SSEURL: o.sse, UpstreamTimeout: 2 * time.Second,
 		Ready: httpx.Ready(nil, nil), Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Verifier:     jwtauthtest.New(t).Verifier(),
 		RateLimitMax: 1000, RateLimitWindow: time.Minute,
 		AuthRateLimitMax: o.authLimit, AuthRateLimitWindow: time.Minute,
 	})
+}
+
+// withToken returns req carrying an access token for role.
+func withToken(t *testing.T, req *http.Request, role jwtauth.Role) *http.Request {
+	t.Helper()
+	req.Header.Set("Authorization", "Bearer "+jwtauthtest.New(t).Token(t, role))
+	return req
 }
 
 func send(t *testing.T, app *fiber.App, req *http.Request) (*http.Response, recordedRequest, map[string]any) {
@@ -93,7 +103,7 @@ func TestRoutesToOwningService(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.path, func(t *testing.T) {
-			resp, rec, _ := send(t, app, httptest.NewRequest(tt.method, tt.path, nil))
+			resp, rec, _ := send(t, app, withToken(t, httptest.NewRequest(tt.method, tt.path, nil), jwtauth.RoleAdmin))
 
 			assert.Equal(t, http.StatusTeapot, resp.StatusCode, "upstream status is passed through")
 			assert.Equal(t, tt.service, rec.Service)
@@ -108,24 +118,79 @@ func TestForwardsBodyAndHeaders(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers", strings.NewReader(`{"name":"feed"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer abc")
+	token := jwtauthtest.New(t).Token(t, jwtauth.RoleAdmin)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Forwarded-For", "6.6.6.6")
 	req.Header.Set("X-Request-ID", "req-42")
 	resp, rec, _ := send(t, app, req)
 
 	assert.Equal(t, `{"name":"feed"}`, rec.Body)
-	assert.Equal(t, "Bearer abc", rec.Auth, "the token reaches the service, which verifies it")
+	assert.Equal(t, "Bearer "+token, rec.Auth, "the token reaches the service, which verifies it again")
 	assert.NotEqual(t, "6.6.6.6", rec.Forwarded, "client supplied X-Forwarded-For is overwritten")
 	assert.Equal(t, "req-42", rec.RequestID, "request id is propagated")
 	assert.Equal(t, "req-42", resp.Header.Get("X-Request-ID"))
 	assert.Empty(t, resp.Header.Get("Server"))
 }
 
+func TestEdgeAuthorization(t *testing.T) {
+	app := newApp(t, options{iam: echoUpstream(t, "iam"), sse: echoUpstream(t, "sse")})
+
+	tests := []struct {
+		method, path string
+		role         jwtauth.Role // empty: no token
+		want         int
+	}{
+		// Public endpoints: a client has no token yet.
+		{http.MethodPost, "/api/v1/auth/login", "", http.StatusTeapot},
+		{http.MethodPost, "/api/v1/auth/register", "", http.StatusTeapot},
+		{http.MethodPost, "/api/v1/auth/refresh", "", http.StatusTeapot},
+		{http.MethodPost, "/api/v1/auth/logout", "", http.StatusTeapot},
+		// Everything else needs a valid token.
+		{http.MethodGet, "/api/v1/auth/me", "", http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1/contents", "", http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1/providers", "", http.StatusUnauthorized},
+		{http.MethodPost, "/api/v1/sync", "", http.StatusUnauthorized},
+		// Viewers read; writes are for admins.
+		{http.MethodGet, "/api/v1/auth/me", jwtauth.RoleViewer, http.StatusTeapot},
+		{http.MethodGet, "/api/v1/contents/1", jwtauth.RoleViewer, http.StatusTeapot},
+		{http.MethodGet, "/api/v1/providers", jwtauth.RoleViewer, http.StatusTeapot},
+		{http.MethodGet, "/api/v1/sync/runs", jwtauth.RoleViewer, http.StatusTeapot},
+		{http.MethodPost, "/api/v1/providers", jwtauth.RoleViewer, http.StatusForbidden},
+		{http.MethodPatch, "/api/v1/providers/1", jwtauth.RoleViewer, http.StatusForbidden},
+		{http.MethodDelete, "/api/v1/providers/1", jwtauth.RoleViewer, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/providers/1/sync", jwtauth.RoleViewer, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/sync", jwtauth.RoleViewer, http.StatusForbidden},
+		{http.MethodPost, "/api/v1/providers", jwtauth.RoleAdmin, http.StatusTeapot},
+		{http.MethodDelete, "/api/v1/providers/1", jwtauth.RoleAdmin, http.StatusTeapot},
+		{http.MethodPost, "/api/v1/sync", jwtauth.RoleAdmin, http.StatusTeapot},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method+" "+tt.path+" as "+string(tt.role), func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			if tt.role != "" {
+				req = withToken(t, req, tt.role)
+			}
+			resp, rec, _ := send(t, app, req)
+
+			assert.Equal(t, tt.want, resp.StatusCode)
+			if tt.want != http.StatusTeapot {
+				assert.Empty(t, rec.Service, "rejected requests never reach a service")
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil)
+	req.Header.Set("Authorization", "Bearer not-a-jwt")
+	resp, _, body := send(t, app, req)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Equal(t, "invalid_token", body["error"].(map[string]any)["code"])
+}
+
 func TestUnknownAPIPathIsNotForwarded(t *testing.T) {
 	app := newApp(t, options{iam: echoUpstream(t, "iam"), sse: echoUpstream(t, "sse")})
 
 	for _, path := range []string{"/api/v1/admin", "/api/v1/contentsx", "/api/v2/contents"} {
-		resp, rec, _ := send(t, app, httptest.NewRequest(http.MethodGet, path, nil))
+		resp, rec, _ := send(t, app, withToken(t, httptest.NewRequest(http.MethodGet, path, nil), jwtauth.RoleAdmin))
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode, path)
 		assert.Empty(t, rec.Service, path)
 	}
@@ -134,7 +199,7 @@ func TestUnknownAPIPathIsNotForwarded(t *testing.T) {
 func TestUpstreamDown(t *testing.T) {
 	app := newApp(t, options{iam: "http://127.0.0.1:1", sse: "http://127.0.0.1:1"})
 
-	resp, _, body := send(t, app, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil))
+	resp, _, body := send(t, app, withToken(t, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil), jwtauth.RoleViewer))
 
 	assert.Equal(t, http.StatusBadGateway, resp.StatusCode)
 	assert.Equal(t, "bad_gateway", body["error"].(map[string]any)["code"])
@@ -151,7 +216,7 @@ func TestAuthRateLimit(t *testing.T) {
 	assert.Equal(t, http.StatusTeapot, login())
 	assert.Equal(t, http.StatusTooManyRequests, login())
 
-	resp, _, _ := send(t, app, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil))
+	resp, _, _ := send(t, app, withToken(t, httptest.NewRequest(http.MethodGet, "/api/v1/contents", nil), jwtauth.RoleViewer))
 	assert.Equal(t, http.StatusTeapot, resp.StatusCode, "other endpoints use the general limit")
 }
 
