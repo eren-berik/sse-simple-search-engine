@@ -73,14 +73,28 @@ func (fakeProviders) Create(_ context.Context, in providers.CreateInput) (domain
 	if in.Name == "provider1" {
 		return domain.Provider{}, domain.ErrConflict
 	}
+	if in.Name == "undetectable" {
+		return domain.Provider{}, domain.ErrFormatNotDetected
+	}
 	return domain.Provider{ID: 2, Name: in.Name, URL: in.URL, Format: domain.ProviderFormat(in.Format), Enabled: true}, nil
 }
 
-func (fakeProviders) Update(_ context.Context, id int64, _ providers.UpdateInput) (domain.Provider, error) {
+func (fakeProviders) Update(_ context.Context, id int64, in providers.UpdateInput) (domain.Provider, error) {
 	if id != 1 {
 		return domain.Provider{}, domain.ErrNotFound
 	}
-	return domain.Provider{ID: 1, Name: "provider1"}, nil
+	p := domain.Provider{ID: 1, Name: "provider1"}
+	if in.Name != nil {
+		p.Name = *in.Name
+	}
+	return p, nil
+}
+
+func (fakeProviders) Delete(_ context.Context, id int64) error {
+	if id != 1 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 type testApp struct {
@@ -149,6 +163,7 @@ func TestAuthorization(t *testing.T) {
 		{http.MethodGet, "/api/v1/sync/runs", "", 401, 200, 200},
 		{http.MethodPost, "/api/v1/providers", `{"name":"feed","url":"https://x.io","format":"json"}`, 401, 403, 201},
 		{http.MethodPatch, "/api/v1/providers/1", `{"enabled":false}`, 401, 403, 200},
+		{http.MethodDelete, "/api/v1/providers/1", "", 401, 403, 204},
 		{http.MethodPost, "/api/v1/providers/1/sync", "", 401, 403, 200},
 		{http.MethodPost, "/api/v1/sync", "", 401, 403, 200},
 	}
@@ -244,10 +259,21 @@ func TestProviderManagement(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 	assert.Equal(t, "conflict", errorCode(body))
 
+	resp, body = app.call(http.MethodPost, "/api/v1/providers", app.admin, `{"name":"undetectable","url":"https://x.io"}`)
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "format_not_detected", errorCode(body))
+
 	resp, _ = app.call(http.MethodPost, "/api/v1/providers", app.admin, `not json`)
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
 	resp, _ = app.call(http.MethodPatch, "/api/v1/providers/9", app.admin, `{"enabled":false}`)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	resp, body = app.call(http.MethodPatch, "/api/v1/providers/1", app.admin, `{"name":"renamed","url":"https://y.io"}`)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "renamed", body["data"].(map[string]any)["name"])
+
+	resp, _ = app.call(http.MethodDelete, "/api/v1/providers/9", app.admin, "")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 

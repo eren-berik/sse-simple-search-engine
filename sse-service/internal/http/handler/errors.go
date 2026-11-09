@@ -12,6 +12,10 @@ import (
 // ErrorMapper maps domain errors to HTTP responses.
 func ErrorMapper(err error) (httpx.MappedError, bool) {
 	switch {
+	case errors.Is(err, domain.ErrProviderUnreachable):
+		return httpx.MappedError{Status: fiber.StatusBadRequest, Code: "provider_unreachable", Message: err.Error()}, true
+	case errors.Is(err, domain.ErrFormatNotDetected):
+		return httpx.MappedError{Status: fiber.StatusBadRequest, Code: "format_not_detected", Message: err.Error()}, true
 	case errors.Is(err, domain.ErrInvalidInput):
 		return httpx.MappedError{Status: fiber.StatusBadRequest, Code: "invalid_input", Message: err.Error()}, true
 	case errors.Is(err, domain.ErrNotFound):

@@ -158,13 +158,14 @@
 
       <form id="provider-form" class="card provider-form" autocomplete="off">
         <h3>Yeni provider</h3>
-        <p class="muted">Yeni provider, seçilen formattaki mevcut şemaya uyan veri döndürmelidir.</p>
+        <p class="muted">Format otomatik algılanır: URL'den veri çekilir ve JSON ya da XML şemasına uyup uymadığı kontrol edilir.</p>
         <div class="filters">
           <label><span>Ad</span><input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" placeholder="ornek-provider"></label>
           <label class="grow"><span>URL</span><input name="url" type="url" required placeholder="https://..."></label>
           <label>
             <span>Format</span>
             <select name="format">
+              <option value="auto">Otomatik algıla</option>
               <option value="json">JSON</option>
               <option value="xml">XML</option>
             </select>
@@ -181,6 +182,32 @@
       <h2 id="detail-title"></h2>
       <dl id="detail-body"></dl>
       <button class="secondary">Kapat</button>
+    </form>
+  </dialog>
+
+  <dialog id="provider-edit">
+    <form id="provider-edit-form" class="stack" method="dialog">
+      <h2>Provider'ı düzenle</h2>
+      <div id="provider-edit-error" class="error" hidden></div>
+      <label>
+        <span>Ad</span>
+        <input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}">
+        <small class="muted">Ad değişince mevcut içerikler ve senkronizasyon geçmişi yeni ada taşınır.</small>
+      </label>
+      <label><span>URL</span><input name="url" type="url" required></label>
+      <label>
+        <span>Format</span>
+        <select name="format">
+          <option value="auto">Otomatik algıla</option>
+          <option value="json">JSON</option>
+          <option value="xml">XML</option>
+        </select>
+        <small class="muted">URL değişirse ve "Otomatik algıla" seçiliyse format yeniden algılanır.</small>
+      </label>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" data-close>Vazgeç</button>
+        <button type="submit" value="save">Kaydet</button>
+      </div>
     </form>
   </dialog>
 

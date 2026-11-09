@@ -5,6 +5,19 @@
   const typeLabels = { video: "Video", text: "Metin" };
   const sortLabels = { popularity: "Popülerlik", relevance: "Alakalılık" };
   const roleLabels = { admin: "Admin", viewer: "Viewer" };
+  const formatDuration = (sec) => {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = String(sec % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
+  };
+  // Labels and value formats for the metrics shown in the content detail dialog.
+  const metricFields = {
+    views: { label: "Görüntülemeler", format: (v) => fmtNumber.format(v) },
+    likes: { label: "Beğeniler", format: (v) => fmtNumber.format(v) },
+    duration_sec: { label: "Süre", format: formatDuration },
+    reading_time: { label: "Okuma Süresi", format: (v) => `${fmtNumber.format(v)} dk` },
+    reactions: { label: "Reaksiyonlar", format: (v) => fmtNumber.format(v) },
+    comments: { label: "Yorumlar", format: (v) => fmtNumber.format(v) },
+  };
   const fmtNumber = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 });
   const fmtDate = new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium" });
   const fmtDateTime = new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short" });
@@ -46,6 +59,9 @@
     bad_gateway: "Servise şu anda ulaşılamıyor.",
     gateway_timeout: "Servis zamanında yanıt vermedi.",
     auth_unavailable: "Kimlik doğrulama şu anda kullanılamıyor.",
+    format_not_detected: "Format algılanamadı: URL'den gelen veri desteklenen JSON veya XML şemasına uymuyor.",
+    provider_unreachable: "Provider URL'sine ulaşılamadı; adresi kontrol edin.",
+    conflict: "Bu isimde bir provider zaten var.",
   };
 
   class ApiError extends Error {
@@ -187,6 +203,7 @@
     $("provider-rows").replaceChildren();
     $("provider-form").reset();
     if ($("detail").open) $("detail").close();
+    if ($("provider-edit").open) $("provider-edit").close();
     $("toast").hidden = true;
     showError($("error"), "");
   }
@@ -345,7 +362,10 @@
         ["Tür", typeLabels[c.type] || c.type],
         ["Provider", `${c.provider} (${c.external_id})`],
         ["Etiketler", c.tags.join(", ") || "-"],
-        ...Object.entries(c.metrics).map(([k, v]) => [k, fmtNumber.format(v)]),
+        ...Object.entries(c.metrics).map(([k, v]) => {
+          const field = metricFields[k];
+          return field ? [field.label, field.format(v)] : [k, fmtNumber.format(v)];
+        }),
         ["Temel puan", fmtNumber.format(b.base)],
         ["Tür katsayısı", fmtNumber.format(b.type_coefficient)],
         ["Güncellik puanı", fmtNumber.format(b.recency)],
@@ -418,12 +438,22 @@
       syncBtn.textContent = "Senkronize et";
       syncBtn.disabled = !p.enabled;
       syncBtn.addEventListener("click", () => runSync(`/api/v1/providers/${p.id}/sync`, syncBtn));
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "secondary small";
+      editBtn.textContent = "Düzenle";
+      editBtn.addEventListener("click", () => openProviderEdit(p));
       const toggleBtn = document.createElement("button");
       toggleBtn.type = "button";
       toggleBtn.className = "secondary small";
       toggleBtn.textContent = p.enabled ? "Devre dışı bırak" : "Etkinleştir";
       toggleBtn.addEventListener("click", () => toggleProvider(p, toggleBtn));
-      actions.append(syncBtn, toggleBtn);
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "secondary small danger";
+      deleteBtn.textContent = "Sil";
+      deleteBtn.addEventListener("click", () => deleteProvider(p, deleteBtn));
+      actions.append(syncBtn, editBtn, toggleBtn, deleteBtn);
 
       tr.append(cell(p.name), cell(p.format.toUpperCase()), cell(p.url, "hide-sm url"), status, runCell, actions);
       rows.append(tr);
@@ -468,6 +498,75 @@
     }
   }
 
+  async function deleteProvider(p, button) {
+    if (!confirm(`"${p.name}" ve bu provider'dan gelen tüm içerikler kalıcı olarak silinecek. Emin misiniz?`)) return;
+    const epoch = authEpoch;
+    button.disabled = true;
+    try {
+      await api(`/api/v1/providers/${p.id}`, { method: "DELETE" });
+      if (isStale(epoch)) return;
+      toast(`"${p.name}" silindi.`);
+      await loadProviders();
+      await loadProviderOptions();
+      loadContents();
+    } catch (err) {
+      if (isStale(epoch)) return;
+      showError($("error"), err.message);
+      button.disabled = false;
+    }
+  }
+
+  // ---------------------------------------------------------------- provider edit dialog
+  let editing = null;
+
+  function openProviderEdit(p) {
+    editing = p;
+    const form = $("provider-edit-form");
+    form.elements.name.value = p.name;
+    form.elements.url.value = p.url;
+    form.elements.format.value = "auto";
+    showError($("provider-edit-error"), "");
+    $("provider-edit").showModal();
+  }
+
+  $("provider-edit").querySelector("[data-close]").addEventListener("click", () => $("provider-edit").close());
+
+  $("provider-edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const p = editing;
+    const name = form.elements.name.value.trim();
+    const url = form.elements.url.value.trim();
+    const format = form.elements.format.value;
+
+    // Send only what changed. With "auto", a changed URL lets the server detect the format.
+    const body = {};
+    if (name !== p.name) body.name = name;
+    if (url !== p.url) body.url = url;
+    if (format !== "auto" && format !== p.format) body.format = format;
+    if (Object.keys(body).length === 0) {
+      $("provider-edit").close();
+      return;
+    }
+
+    const epoch = authEpoch;
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    try {
+      const { data } = await api(`/api/v1/providers/${p.id}`, { method: "PATCH", body });
+      if (isStale(epoch)) return;
+      $("provider-edit").close();
+      toast(`"${data.data.name}" güncellendi (format: ${data.data.format.toUpperCase()}).`);
+      await loadProviders();
+      await loadProviderOptions();
+      loadContents();
+    } catch (err) {
+      if (!isStale(epoch)) showError($("provider-edit-error"), err.message);
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   $("sync-all-btn").addEventListener("click", (e) => runSync("/api/v1/sync", e.currentTarget));
 
   $("provider-form").addEventListener("submit", async (e) => {
@@ -484,7 +583,7 @@
       });
       if (isStale(epoch)) return;
       form.reset();
-      toast(`"${data.data.name}" eklendi. İçerikleri için senkronize edin.`);
+      toast(`"${data.data.name}" eklendi (format: ${data.data.format.toUpperCase()}). İçerikleri için senkronize edin.`);
       await loadProviders();
       loadProviderOptions();
     } catch (err) {

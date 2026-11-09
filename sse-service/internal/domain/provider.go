@@ -39,8 +39,9 @@ type Provider struct {
 }
 
 // ProviderPatch holds the mutable fields of a provider; nil fields are left unchanged.
-// The name is immutable because stored content references it.
+// Renaming also renames the provider on its stored contents and sync runs.
 type ProviderPatch struct {
+	Name    *string
 	URL     *string
 	Format  *ProviderFormat
 	Enabled *bool

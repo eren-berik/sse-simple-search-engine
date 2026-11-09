@@ -223,7 +223,9 @@ paths:
       tags: [providers]
       summary: Add a provider (admin)
       description: |
-        The provider's payload must follow the schema of its format (`json` like provider1, `xml` like provider2).
+        The provider's payload must follow the schema of a supported format (`json` like provider1, `xml` like provider2).
+        When `format` is omitted or `auto`, the URL is fetched and the format whose adapter reads at least one
+        valid item from it is used; if none does, the request fails with `400 invalid_input`.
         Its content is fetched on the next sync, or immediately with `POST /api/v1/providers/{id}/sync`.
       requestBody:
         required: true
@@ -231,11 +233,11 @@ paths:
           application/json:
             schema:
               type: object
-              required: [name, url, format]
+              required: [name, url]
               properties:
-                name: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,49}$', example: my-feed, description: Immutable; stored on every content item }
+                name: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,49}$', example: my-feed }
                 url: { type: string, format: uri, example: 'https://example.com/feed.json' }
-                format: { $ref: '#/components/schemas/ProviderFormat' }
+                format: { $ref: '#/components/schemas/ProviderFormatInput' }
                 enabled: { type: boolean, default: true }
       responses:
         '201':
@@ -259,6 +261,9 @@ paths:
     patch:
       tags: [providers]
       summary: Update a provider (admin)
+      description: |
+        Only the given fields change. Renaming moves the provider's contents and sync history to the new name.
+        When `url` changes and `format` is omitted (or `auto`), the format is detected again from the new URL.
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
       requestBody:
@@ -268,8 +273,9 @@ paths:
             schema:
               type: object
               properties:
+                name: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{1,49}$' }
                 url: { type: string, format: uri }
-                format: { $ref: '#/components/schemas/ProviderFormat' }
+                format: { $ref: '#/components/schemas/ProviderFormatInput' }
                 enabled: { type: boolean }
       responses:
         '200':
@@ -281,6 +287,21 @@ paths:
                 properties:
                   data: { $ref: '#/components/schemas/Provider' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Name already used (`conflict`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+    delete:
+      tags: [providers]
+      summary: Delete a provider and its contents (admin)
+      description: Permanently removes the provider, every content item ingested from it and its sync history.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        '204': { description: Deleted }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -389,6 +410,12 @@ components:
     ProviderFormat:
       type: string
       enum: [json, xml]
+
+    ProviderFormatInput:
+      type: string
+      enum: [auto, json, xml]
+      default: auto
+      description: '`auto` (or omitted) detects the format from the provider URL'
 
     Provider:
       type: object

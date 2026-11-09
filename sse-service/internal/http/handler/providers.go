@@ -18,6 +18,7 @@ type ProviderManager interface {
 	List(ctx context.Context) ([]domain.Provider, error)
 	Create(ctx context.Context, in providers.CreateInput) (domain.Provider, error)
 	Update(ctx context.Context, id int64, in providers.UpdateInput) (domain.Provider, error)
+	Delete(ctx context.Context, id int64) error
 }
 
 type ProviderHandler struct {
@@ -41,11 +42,12 @@ type providerDTO struct {
 type createProviderRequest struct {
 	Name    string `json:"name"`
 	URL     string `json:"url"`
-	Format  string `json:"format"`
+	Format  string `json:"format"` // optional: empty or "auto" detects it
 	Enabled *bool  `json:"enabled"`
 }
 
 type updateProviderRequest struct {
+	Name    *string `json:"name"`
 	URL     *string `json:"url"`
 	Format  *string `json:"format"`
 	Enabled *bool   `json:"enabled"`
@@ -87,11 +89,23 @@ func (h *ProviderHandler) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fmt.Errorf("%w: request body must be valid JSON", domain.ErrInvalidInput)
 	}
-	p, err := h.svc.Update(c.UserContext(), id, providers.UpdateInput{URL: req.URL, Format: req.Format, Enabled: req.Enabled})
+	p, err := h.svc.Update(c.UserContext(), id, providers.UpdateInput{Name: req.Name, URL: req.URL, Format: req.Format, Enabled: req.Enabled})
 	if err != nil {
 		return err
 	}
 	return httpx.OK(c, toProviderDTO(p), nil)
+}
+
+// Delete handles DELETE /api/v1/providers/:id. The provider's contents and sync runs are removed too.
+func (h *ProviderHandler) Delete(c *fiber.Ctx) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	if err := h.svc.Delete(c.UserContext(), id); err != nil {
+		return err
+	}
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 func toProviderDTO(p domain.Provider) providerDTO {
