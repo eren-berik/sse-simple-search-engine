@@ -3,9 +3,11 @@ package router
 
 import (
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/filesystem"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/redis/go-redis/v9"
@@ -13,6 +15,7 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/internal/http/handler"
 	"github.com/eren-berik/sse-simple-search-engine/internal/http/middleware"
 	"github.com/eren-berik/sse-simple-search-engine/internal/http/response"
+	"github.com/eren-berik/sse-simple-search-engine/internal/web"
 )
 
 type Deps struct {
@@ -52,6 +55,12 @@ func New(d Deps) *fiber.App {
 	v1.Get("/contents/:id", d.Contents.Get)
 	v1.Get("/sync/runs", d.Sync.Status)
 	v1.Post("/admin/sync", middleware.APIKey(d.AdminAPIKey), d.Sync.Trigger)
+
+	app.Use("/", filesystem.New(filesystem.Config{
+		Root:   http.FS(web.Static),
+		Index:  "index.html",
+		MaxAge: 300,
+	}))
 
 	return app
 }
