@@ -43,12 +43,15 @@ type Resilience struct {
 	cfg     ResilienceConfig
 	breaker *gobreaker.CircuitBreaker[struct{}]
 	sleep   func(ctx context.Context, d time.Duration) error
+	metrics *Metrics
 }
 
-func NewResilience(name string, cfg ResilienceConfig, log *slog.Logger) *Resilience {
-	return &Resilience{
-		name: name,
-		cfg:  cfg,
+// NewResilience guards the upstream called name. m may be nil.
+func NewResilience(name string, cfg ResilienceConfig, log *slog.Logger, m *Metrics) *Resilience {
+	r := &Resilience{
+		name:    name,
+		cfg:     cfg,
+		metrics: m,
 		breaker: gobreaker.NewCircuitBreaker[struct{}](gobreaker.Settings{
 			Name:        name,
 			MaxRequests: cfg.HalfOpenRequests,
@@ -62,6 +65,8 @@ func NewResilience(name string, cfg ResilienceConfig, log *slog.Logger) *Resilie
 		}),
 		sleep: sleepContext,
 	}
+	m.watchCircuit(name, r.breaker)
+	return r
 }
 
 // Guard is a proxy.Guard.
@@ -73,6 +78,7 @@ func (r *Resilience) Guard(c *fiber.Ctx, call proxy.Call) error {
 	for attempt := 0; ; attempt++ {
 		err := r.attempt(c, call)
 		if errors.Is(err, ErrCircuitOpen) {
+			r.metrics.circuitReject(r.name)
 			c.Set(fiber.HeaderRetryAfter, strconv.Itoa(max(1, int(r.cfg.OpenTimeout.Seconds()))))
 			return err
 		}
@@ -82,6 +88,7 @@ func (r *Resilience) Guard(c *fiber.Ctx, call proxy.Call) error {
 		if r.sleep(c.UserContext(), r.backoff(attempt)) != nil {
 			return finalError(err)
 		}
+		r.metrics.retry(r.name)
 	}
 }
 

@@ -26,13 +26,17 @@ type RateLimits struct {
 	Sync Limit // sync triggers per user; each one fetches every provider
 
 	// Redis is optional; when set, counters are shared across gateway instances.
-	Redis *redis.Client
-	Log   *slog.Logger
+	Redis   *redis.Client
+	Log     *slog.Logger
+	Metrics *Metrics
 }
 
 // PerIP limits requests per client IP.
 func (r RateLimits) PerIP(name string, l Limit) fiber.Handler {
-	return ratelimit.New(ratelimit.Config{Name: name, Max: l.Max, Window: l.Window, Redis: r.Redis, Log: r.Log})
+	return ratelimit.New(ratelimit.Config{
+		Name: name, Max: l.Max, Window: l.Window, Redis: r.Redis, Log: r.Log,
+		OnLimit: func() { r.Metrics.rateLimit(name) },
+	})
 }
 
 // PerUser limits requests per authenticated user. It must run after Authenticate: only a
@@ -40,6 +44,7 @@ func (r RateLimits) PerIP(name string, l Limit) fiber.Handler {
 func (r RateLimits) PerUser(name string, l Limit) fiber.Handler {
 	return ratelimit.New(ratelimit.Config{
 		Name: name, Max: l.Max, Window: l.Window, Redis: r.Redis, Log: r.Log, Key: userKey,
+		OnLimit: func() { r.Metrics.rateLimit(name) },
 	})
 }
 
