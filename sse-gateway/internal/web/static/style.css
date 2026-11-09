@@ -198,6 +198,9 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
 #provider-rows tr { cursor: default; }
 .url { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
 button.small { padding: 4px 10px; font-size: 13px; }
+button.danger { color: var(--error-text); border-color: color-mix(in srgb, var(--error-text) 40%, var(--border)); }
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+#provider-edit h2 { margin: 0; font-size: 18px; }
 
 .toast {
   position: fixed;
