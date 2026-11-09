@@ -3,6 +3,7 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/provider"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/scoring"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpclient"
 )
 
 // Store persists ingested content.
@@ -157,11 +159,16 @@ func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.
 		}
 		run.Upserted, err = s.store.UpsertContents(ctx, contents)
 	}
-	if err != nil {
+	switch {
+	case errors.Is(err, httpclient.ErrCircuitOpen):
+		run.Status = domain.SyncStatusFailed
+		run.Error = err.Error()
+		log.Warn("provider skipped: its circuit is open after repeated failures", "error", err)
+	case err != nil:
 		run.Status = domain.SyncStatusFailed
 		run.Error = err.Error()
 		log.Error("provider sync failed", "error", err)
-	} else {
+	default:
 		log.Info("provider synced", "fetched", run.Fetched, "upserted", run.Upserted)
 	}
 	run.FinishedAt = s.now()

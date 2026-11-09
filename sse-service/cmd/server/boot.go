@@ -131,12 +131,15 @@ func newScorer(cfg config.Config) *scoring.Scorer {
 }
 
 // newProviderRegistry builds providers from their stored configuration. Each provider gets its
-// own HTTP client so rate limits are enforced per provider.
+// own HTTP client so rate limits and circuit breakers apply per provider.
 func newProviderRegistry(cfg config.Config, log *slog.Logger) *registry.Registry {
 	return registry.New(httpclient.Config{
 		Timeout:       cfg.ProviderTimeout,
 		RatePerSecond: cfg.ProviderRatePerSec,
 		Burst:         cfg.ProviderBurst,
 		MaxRetries:    cfg.ProviderMaxRetries,
+
+		BreakerFailureThreshold: cfg.ProviderBreakerFailureThreshold,
+		BreakerOpenTimeout:      cfg.ProviderBreakerOpenTimeout,
 	}, log)
 }
