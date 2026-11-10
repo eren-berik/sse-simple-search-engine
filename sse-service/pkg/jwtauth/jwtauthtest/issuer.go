@@ -47,9 +47,21 @@ func (i *TokenIssuer) Token(t testing.TB, role jwtauth.Role) string {
 
 func (i *TokenIssuer) TokenWithExpiry(t testing.TB, role jwtauth.Role, exp time.Time) string {
 	t.Helper()
+	return i.sign(t, role, "", exp)
+}
+
+// TokenForSession returns a valid access token issued for the login session sessionID.
+func (i *TokenIssuer) TokenForSession(t testing.TB, role jwtauth.Role, sessionID string) string {
+	t.Helper()
+	return i.sign(t, role, sessionID, time.Now().Add(15*time.Minute))
+}
+
+func (i *TokenIssuer) sign(t testing.TB, role jwtauth.Role, sessionID string, exp time.Time) string {
+	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, jwtauth.Claims{
-		Username: "test-" + string(role),
-		Role:     role,
+		Username:  "test-" + string(role),
+		Role:      role,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    Issuer,
 			Subject:   "user-" + string(role),

@@ -78,7 +78,7 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		Contents:  handler.NewContentHandler(domainMetrics.InstrumentSearcher(searchSvc)),
 		Sync:      handler.NewSyncHandler(app.ingest),
 		Providers: handler.NewProviderHandler(providers.NewService(providerRepo, providerRegistry, searchSvc, log)),
-		Verifier:  jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
+		Verifier:  newVerifier(keys, cfg, rdb, log),
 		// The cache and the identity service are optional for readiness: searches fall back to the
 		// database and already fetched signing keys keep verifying tokens.
 		Ready: httpx.Ready(
@@ -157,4 +157,14 @@ func newProviderRegistry(cfg config.Config, log *slog.Logger) *registry.Registry
 		BreakerFailureThreshold: cfg.ProviderBreakerFailureThreshold,
 		BreakerOpenTimeout:      cfg.ProviderBreakerOpenTimeout,
 	}, log)
+}
+
+// newVerifier checks access tokens against the identity service's keys and, when Redis is
+// configured, against the sessions it revoked (logout, stolen refresh token).
+func newVerifier(keys jwtauth.KeySource, cfg config.Config, rdb *redis.Client, log *slog.Logger) *jwtauth.Verifier {
+	v := jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience)
+	if rdb != nil {
+		v.WithRevocations(jwtauth.NewSessionRevocations(rdb, log))
+	}
+	return v
 }
