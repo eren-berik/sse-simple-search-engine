@@ -245,6 +245,9 @@
     clearTimeout(debounce);
     $("filters").reset();
     setType("");
+    setTag("");
+    $("published_to").min = "";
+    $("published_from").max = "";
     $("provider").replaceChildren(new Option("Tümü", ""));
     state.page = 1;
     state.totalPages = 0;
@@ -361,7 +364,7 @@
     const meta = el("div", "item-meta");
     meta.append(el("span", "", typeLabels[item.type] || item.type), el("span", "dot", item.provider),
       el("span", "dot", fmtDate.format(new Date(item.published_at))));
-    for (const tag of item.tags.slice(0, 3)) meta.append(el("span", "chip", tag));
+    for (const tag of item.tags.slice(0, 3)) meta.append(tagChip(tag));
     main.append(el("h3", "item-title", item.title), meta);
 
     const metrics = el("div", "metrics");
@@ -380,6 +383,21 @@
     li.addEventListener("click", () => openDetail(item.id));
     li.addEventListener("keydown", (e) => { if (e.key === "Enter") openDetail(item.id); });
     return li;
+  }
+
+  // tagChip filters the list by its tag; clicking the active tag clears the filter.
+  function tagChip(tag, { closeDialog = false } = {}) {
+    const chip = el("button", `chip ${tag === $("tag").value ? "active" : ""}`.trim(), tag);
+    chip.type = "button";
+    chip.title = `"${tag}" etiketine göre filtrele`;
+    chip.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // the card behind the chip opens the detail dialog
+      if (closeDialog) $("detail").close();
+      applyFilter(() => setTag(tag === $("tag").value ? "" : tag));
+    });
+    chip.addEventListener("keydown", (e) => e.stopPropagation());
+    return chip;
   }
 
   function renderSkeleton(count) {
@@ -448,7 +466,7 @@
   async function loadContents() {
     const epoch = authEpoch;
     const params = new URLSearchParams();
-    for (const key of ["q", "type", "provider", "sort", "per_page"]) {
+    for (const key of ["q", "type", "provider", "tag", "published_from", "published_to", "sort", "per_page"]) {
       const value = $(key).value.trim();
       if (value) params.set(key, value);
     }
@@ -598,11 +616,48 @@
       renderScoreExplanation(c);
 
       const tags = $("detail-tags");
-      tags.replaceChildren(...c.tags.map((t) => el("span", "chip", t)));
+      tags.replaceChildren(...c.tags.map((t) => tagChip(t, { closeDialog: true })));
       $("detail").showModal();
     } catch (err) {
       if (!isStale(epoch)) showError($("error"), err.message);
     }
+  }
+
+  // applyFilter changes a filter and reloads from the first page.
+  function applyFilter(change) {
+    change();
+    state.page = 1;
+    loadContents();
+  }
+
+  // The tag filter is set from the tag chips and shown as a removable pill.
+  function setTag(tag) {
+    $("tag").value = tag;
+    renderActiveFilters();
+  }
+
+  function renderActiveFilters() {
+    const box = $("active-filters");
+    box.replaceChildren();
+    const tag = $("tag").value;
+    if (!tag) return;
+    const pill = el("span", "filter-pill", `Etiket: ${tag}`);
+    const remove = el("button");
+    remove.type = "button";
+    remove.setAttribute("aria-label", "Etiket filtresini kaldır");
+    remove.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+    remove.addEventListener("click", () => applyFilter(() => setTag("")));
+    pill.append(remove);
+    box.append(pill);
+  }
+
+  // Each date bounds the other, so the browser's picker cannot produce a reversed range.
+  for (const id of ["published_from", "published_to"]) {
+    $(id).addEventListener("change", () => {
+      $("published_to").min = $("published_from").value;
+      $("published_from").max = $("published_to").value;
+      applyFilter(() => {});
+    });
   }
 
   // The type filter is a segmented control backed by the hidden #type input.

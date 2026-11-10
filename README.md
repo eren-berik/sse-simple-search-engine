@@ -248,7 +248,9 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüz (
   | Metin | Okuma süresi | Reaksiyon | Yorum | Reaksiyon / dk |
 
   Dördüncü sütun, skor formülündeki etkileşim oranı. Sayılar 1 milyona kadar tam yazılıyor; Türkçe kısaltmadaki "B" (bin) "milyar" gibi okunabildiği için kısaltma sadece milyonun üstünde kullanılıyor.
-- **Filtreler:** Arama kutusu, tür için Tümü/Video/Metin seçimi, provider, sıralama ve sayfa boyutu. Sayfalama numaralı.
+- **Filtreler:** Arama kutusu, tür için Tümü/Video/Metin seçimi, provider, yayın tarihi aralığı, sıralama ve sayfa boyutu. Sayfalama numaralı.
+  - Kartlardaki ve detay penceresindeki etiketlere tıklanınca liste o etikete göre süzülür. Etiket filtresi sonuç sayısının yanında kaldırılabilir bir rozet olarak görünür; aynı etikete tekrar tıklamak da filtreyi kaldırır.
+  - Tarih alanları birbirini sınırlar, böylece ters bir aralık seçilemez.
 - **Detay penceresi:** Metriklerin tam değerleri ve skorun nasıl hesaplandığı gösteriliyor. Üç bileşen renkli bir çubukta, her biri ayrıca kendi kartında adım adım hesaplanıyor. Örnek, "Clean Architecture in Go":
   - **Temel puan × tür katsayısı:** okuma süresi 8, reaksiyon 450 ÷ 50 = 9; temel puan 8 + 9 = 17; katsayı 17 × 1 = 17.
   - **Güncellik:** kademeler (≤ 7 gün +5, ≤ 30 gün +3, ≤ 90 gün +1, daha eski 0); içeriğin düştüğü kademe vurgulanıyor ve yaşı (gün) yazıyor.
@@ -395,10 +397,13 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 
 ## Arama ve Sıralama
 
-`GET /api/v1/contents?q=&type=video|text&provider=<ad>&sort=popularity|relevance&page=1&per_page=20`
+`GET /api/v1/contents?q=&type=video|text&provider=<ad>&tag=<etiket>&published_from=YYYY-MM-DD&published_to=YYYY-MM-DD&sort=popularity|relevance&page=1&per_page=20`
 
 - **Anahtar kelime:** Başlık ve etiketlerde full-text eşleşme **veya** başlıkta substring eşleşmesi. `"tam ifade"` ve `-hariç` sözdizimi desteklenir. Kullanıcı girdisindeki LIKE wildcard'ları (`%`, `_`) escape edilir.
-- **Filtreler:** `type` ve `provider` birbiriyle ve anahtar kelimeyle birlikte kullanılabilir.
+- **Filtreler:** Hepsi birbiriyle ve anahtar kelimeyle birlikte kullanılabilir.
+  - `type` ve `provider`.
+  - `tag`: o etiketi taşıyan içerikler. Büyük/küçük harf duyarsız; etiketler küçük harfle saklandığı için sorgu `tags @> ARRAY[...]` şeklinde GIN index'i kullanır.
+  - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
 - **Sıralama:**
   - `popularity`: `score DESC`
   - `relevance`: `ts_rank + similarity DESC`
