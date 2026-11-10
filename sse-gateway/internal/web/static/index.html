@@ -92,6 +92,7 @@
 
         <div class="filter-row">
           <input id="type" name="type" type="hidden" value="">
+          <input id="tag" name="tag" type="hidden" value="">
           <div class="seg" role="radiogroup" aria-label="İçerik türü" id="type-seg">
             <button type="button" role="radio" data-type="" aria-checked="true">Tümü</button>
             <button type="button" role="radio" data-type="video" aria-checked="false">Video</button>
@@ -103,6 +104,14 @@
             <select id="provider" name="provider">
               <option value="">Tümü</option>
             </select>
+          </label>
+          <label class="field">
+            <span>Yayın: başlangıç</span>
+            <input id="published_from" name="published_from" type="date">
+          </label>
+          <label class="field">
+            <span>Yayın: bitiş</span>
+            <input id="published_to" name="published_to" type="date">
           </label>
           <label class="field">
             <span>Sıralama</span>
@@ -125,7 +134,10 @@
       </form>
 
       <div class="results-head">
-        <p id="summary" class="summary"></p>
+        <div class="summary-line">
+          <p id="summary" class="summary"></p>
+          <div id="active-filters" class="active-filters"></div>
+        </div>
         <p id="sort-hint" class="hint" hidden>
           Alakalılık bir anahtar kelimeye göre hesaplanır; kelime girilmediği için sonuçlar popülerliğe göre sıralandı.
         </p>

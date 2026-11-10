@@ -209,6 +209,26 @@ func TestListContents(t *testing.T) {
 
 	_, body = app.get("/api/v1/contents?sort=popularity")
 	assert.NotContains(t, body["data"].([]any)[0].(map[string]any), "relevance")
+
+	resp, _ = app.get("/api/v1/contents?tag=DevOps&published_from=2024-03-01&published_to=2024-03-31")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "devops", s.lastQuery.Tag)
+	assert.Equal(t, time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC), s.lastQuery.PublishedFrom)
+	assert.Equal(t, time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC), s.lastQuery.PublishedTo)
+}
+
+func TestListDateValidation(t *testing.T) {
+	app := newApp(t, &fakeSearcher{}, fakeSyncer{})
+
+	for _, query := range []string{
+		"published_from=14.03.2024",
+		"published_to=2024-02-30",
+		"published_from=2024-03-15&published_to=2024-03-14",
+	} {
+		resp, body := app.get("/api/v1/contents?" + query)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, query)
+		assert.Equal(t, "invalid_input", errorCode(body), query)
+	}
 }
 
 func TestListValidation(t *testing.T) {

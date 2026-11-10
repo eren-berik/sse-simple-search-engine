@@ -67,13 +67,25 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 		return err
 	}
 
+	from, err := queryDate(c, "published_from")
+	if err != nil {
+		return err
+	}
+	to, err := queryDate(c, "published_to")
+	if err != nil {
+		return err
+	}
+
 	q := domain.SearchQuery{
-		Keyword:  c.Query("q"),
-		Type:     domain.ContentType(c.Query("type")),
-		Provider: c.Query("provider"),
-		Sort:     domain.SortBy(c.Query("sort")),
-		Page:     page,
-		PerPage:  perPage,
+		Keyword:       c.Query("q"),
+		Type:          domain.ContentType(c.Query("type")),
+		Provider:      c.Query("provider"),
+		Tag:           c.Query("tag"),
+		PublishedFrom: from,
+		PublishedTo:   to,
+		Sort:          domain.SortBy(c.Query("sort")),
+		Page:          page,
+		PerPage:       perPage,
 	}
 	res, status, err := h.svc.Search(c.UserContext(), q)
 	if err != nil {
@@ -140,6 +152,19 @@ func toDTO(c domain.Content) contentDTO {
 		Tags:        tags,
 		PublishedAt: c.PublishedAt,
 	}
+}
+
+// queryDate parses an optional YYYY-MM-DD query parameter as a UTC day; absent means the zero time.
+func queryDate(c *fiber.Ctx, key string) (time.Time, error) {
+	v := c.Query(key)
+	if v == "" {
+		return time.Time{}, nil
+	}
+	t, err := time.Parse(time.DateOnly, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: %s must be a date in YYYY-MM-DD format", domain.ErrInvalidInput, key)
+	}
+	return t, nil
 }
 
 // queryInt parses an optional integer query parameter; absent means 0 (use the default).

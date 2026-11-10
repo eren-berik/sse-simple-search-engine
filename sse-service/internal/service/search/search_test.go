@@ -155,3 +155,21 @@ func TestGetReturnsBreakdown(t *testing.T) {
 	_, _, err = svc.Get(context.Background(), 2)
 	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
+
+func TestCacheKeyCoversEveryFilter(t *testing.T) {
+	base := domain.SearchQuery{Sort: domain.SortPopularity, Page: 1, PerPage: 10}
+	day := time.Date(2024, 3, 14, 0, 0, 0, 0, time.UTC)
+	keys := map[string]string{}
+	for name, q := range map[string]domain.SearchQuery{
+		"base": base,
+		"tag":  func() domain.SearchQuery { q := base; q.Tag = "go"; return q }(),
+		"from": func() domain.SearchQuery { q := base; q.PublishedFrom = day; return q }(),
+		"to":   func() domain.SearchQuery { q := base; q.PublishedTo = day; return q }(),
+	} {
+		key := buildKey("1", q)
+		for other, k := range keys {
+			assert.NotEqual(t, k, key, "%s and %s must not share a cache entry", name, other)
+		}
+		keys[name] = key
+	}
+}

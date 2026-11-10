@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -18,6 +19,7 @@ const (
 	DefaultPerPage   = 20
 	MaxPerPage       = 100
 	MaxKeywordLength = 200
+	MaxTagLength     = 50
 )
 
 // SearchQuery describes a content search request.
@@ -26,9 +28,15 @@ type SearchQuery struct {
 	Type    ContentType // empty means all types
 	// Provider filters by provider name; empty means all providers.
 	Provider string
-	Sort     SortBy
-	Page     int
-	PerPage  int
+	// Tag keeps contents carrying this tag (tags are stored lowercase); empty means any.
+	Tag string
+	// PublishedFrom and PublishedTo bound the publication day, both inclusive (UTC dates);
+	// the zero time means unbounded.
+	PublishedFrom time.Time
+	PublishedTo   time.Time
+	Sort          SortBy
+	Page          int
+	PerPage       int
 }
 
 // Normalize applies defaults and validates the query in place.
@@ -40,6 +48,13 @@ func (q *SearchQuery) Normalize() error {
 	}
 
 	q.Provider = strings.ToLower(strings.TrimSpace(q.Provider))
+	q.Tag = strings.ToLower(strings.TrimSpace(q.Tag))
+	if utf8.RuneCountInString(q.Tag) > MaxTagLength {
+		return fmt.Errorf("%w: tag must be at most %d characters", ErrInvalidInput, MaxTagLength)
+	}
+	if !q.PublishedFrom.IsZero() && !q.PublishedTo.IsZero() && q.PublishedFrom.After(q.PublishedTo) {
+		return fmt.Errorf("%w: published_from must not be after published_to", ErrInvalidInput)
+	}
 
 	if q.Type != "" {
 		t, err := ParseContentType(string(q.Type))

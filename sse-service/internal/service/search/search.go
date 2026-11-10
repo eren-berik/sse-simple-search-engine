@@ -133,9 +133,17 @@ func (s *Service) cacheKey(ctx context.Context, q domain.SearchQuery) (string, e
 // buildKey derives a cache key from a normalized query. Keyword matching is case-insensitive, so the key is too.
 func buildKey(version string, q domain.SearchQuery) string {
 	raw := strings.Join([]string{
-		strings.ToLower(q.Keyword), string(q.Type), q.Provider, string(q.Sort),
+		strings.ToLower(q.Keyword), string(q.Type), q.Provider, q.Tag,
+		dateKey(q.PublishedFrom), dateKey(q.PublishedTo), string(q.Sort),
 		strconv.Itoa(q.Page), strconv.Itoa(q.PerPage),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(raw))
 	return "search:v" + version + ":" + hex.EncodeToString(sum[:])
+}
+
+func dateKey(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.DateOnly)
 }
