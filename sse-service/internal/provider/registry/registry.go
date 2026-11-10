@@ -17,7 +17,7 @@ import (
 )
 
 // Factory builds a provider adapter for one wire format.
-type Factory func(name, url string, client provider.Getter, log *slog.Logger) provider.Provider
+type Factory func(name, url string, client provider.Getter, maxPages int, log *slog.Logger) provider.Provider
 
 // Parser decodes a payload of one wire format; it is used to detect a provider's format.
 type Parser func(providerName string, data []byte) (contents []domain.Content, skipped []error, err error)
@@ -32,6 +32,7 @@ type adapter struct {
 type Registry struct {
 	adapters  map[domain.ProviderFormat]adapter
 	clientCfg httpclient.Config
+	maxPages  int
 	log       *slog.Logger
 
 	mu sync.Mutex
@@ -44,19 +45,21 @@ type cachedClient struct {
 	client    *httpclient.Client
 }
 
-// New returns a registry with the JSON and XML adapters registered.
-func New(clientCfg httpclient.Config, log *slog.Logger) *Registry {
+// New returns a registry with the JSON and XML adapters registered. maxPages bounds how many
+// pages a fetch follows (0 means provider.DefaultMaxPages).
+func New(clientCfg httpclient.Config, maxPages int, log *slog.Logger) *Registry {
 	r := &Registry{
 		adapters:  map[domain.ProviderFormat]adapter{},
 		clientCfg: clientCfg,
+		maxPages:  maxPages,
 		log:       log,
 		clients:   map[int64]cachedClient{},
 	}
-	r.Register(domain.ProviderFormatJSON, func(name, url string, c provider.Getter, log *slog.Logger) provider.Provider {
-		return jsonprovider.New(name, url, c, log)
+	r.Register(domain.ProviderFormatJSON, func(name, url string, c provider.Getter, maxPages int, log *slog.Logger) provider.Provider {
+		return jsonprovider.New(name, url, c, maxPages, log)
 	}, jsonprovider.Parse)
-	r.Register(domain.ProviderFormatXML, func(name, url string, c provider.Getter, log *slog.Logger) provider.Provider {
-		return xmlprovider.New(name, url, c, log)
+	r.Register(domain.ProviderFormatXML, func(name, url string, c provider.Getter, maxPages int, log *slog.Logger) provider.Provider {
+		return xmlprovider.New(name, url, c, maxPages, log)
 	}, xmlprovider.Parse)
 	return r
 }
@@ -71,7 +74,7 @@ func (r *Registry) Build(cfg domain.Provider) (provider.Provider, error) {
 	if !ok {
 		return nil, fmt.Errorf("no adapter for provider format %q", cfg.Format)
 	}
-	return a.factory(cfg.Name, cfg.URL, r.client(cfg), r.log), nil
+	return a.factory(cfg.Name, cfg.URL, r.client(cfg), r.maxPages, r.log), nil
 }
 
 // Detect fetches url and returns the format whose adapter reads at least one valid item from it.

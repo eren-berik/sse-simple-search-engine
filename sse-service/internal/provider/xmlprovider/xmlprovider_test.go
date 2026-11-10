@@ -21,9 +21,10 @@ func (f fakeGetter) Get(context.Context, string) ([]byte, error) { return f.body
 func TestFetchFixture(t *testing.T) {
 	data, err := os.ReadFile("../../../test/testdata/provider2.xml")
 	require.NoError(t, err)
-	p := New("provider2", "http://example", fakeGetter{body: data}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p := New("provider2", "http://example", fakeGetter{body: data}, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	contents, err := p.Fetch(context.Background())
+	feed, err := p.Fetch(context.Background())
+	contents := feed.Contents
 
 	require.NoError(t, err)
 	require.Len(t, contents, 4)

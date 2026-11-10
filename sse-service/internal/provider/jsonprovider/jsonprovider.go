@@ -38,51 +38,54 @@ type item struct {
 
 // Provider fetches content from a JSON endpoint.
 type Provider struct {
-	name   string
-	url    string
-	client provider.Getter
-	log    *slog.Logger
+	name     string
+	url      string
+	client   provider.Getter
+	maxPages int
+	log      *slog.Logger
 }
 
-func New(name, url string, client provider.Getter, log *slog.Logger) *Provider {
-	return &Provider{name: name, url: url, client: client, log: log.With("provider", name)}
+func New(name, url string, client provider.Getter, maxPages int, log *slog.Logger) *Provider {
+	return &Provider{name: name, url: url, client: client, maxPages: maxPages, log: log.With("provider", name)}
 }
 
 func (p *Provider) Name() string { return p.name }
 
-func (p *Provider) Fetch(ctx context.Context) ([]domain.Content, error) {
-	body, err := p.client.Get(ctx, p.url)
-	if err != nil {
-		return nil, err
-	}
-	contents, skipped, err := Parse(p.name, body)
-	if err != nil {
-		return nil, err
-	}
-	for _, e := range skipped {
-		p.log.Warn("skipping invalid item", "error", e)
-	}
-	return contents, nil
+func (p *Provider) Fetch(ctx context.Context) (provider.Feed, error) {
+	return provider.FetchPages(ctx, p.client, p.url, func(data []byte) (provider.Page, error) {
+		return ParsePage(p.name, data)
+	}, p.maxPages, p.log)
 }
 
 // Parse decodes a provider payload. Invalid items are skipped and reported in skipped
 // so a single bad record does not block the whole feed.
 func Parse(providerName string, data []byte) (contents []domain.Content, skipped []error, err error) {
+	page, err := ParsePage(providerName, data)
+	return page.Contents, page.Skipped, err
+}
+
+// ParsePage decodes one page of the feed, with its pagination metadata.
+func ParsePage(providerName string, data []byte) (provider.Page, error) {
 	var resp response
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, nil, fmt.Errorf("decode json payload: %w", err)
+		return provider.Page{}, fmt.Errorf("decode json payload: %w", err)
 	}
 
-	contents = make([]domain.Content, 0, len(resp.Contents))
+	page := provider.Page{
+		Contents: make([]domain.Content, 0, len(resp.Contents)),
+		Number:   resp.Pagination.Page,
+		PerPage:  resp.Pagination.PerPage,
+		Total:    resp.Pagination.Total,
+	}
 	for _, it := range resp.Contents {
 		c, err := it.toDomain(providerName)
 		if err != nil {
-			skipped = append(skipped, err)
+			page.Skipped = append(page.Skipped, err)
 			continue
 		}
-		contents = append(contents, c)
+		page.Contents = append(page.Contents, c)
 	}
-	return contents, skipped, nil
+	return page, nil
 }
 
 func (it item) toDomain(providerName string) (domain.Content, error) {

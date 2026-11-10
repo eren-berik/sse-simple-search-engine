@@ -68,7 +68,7 @@ func TestParseMalformedPayload(t *testing.T) {
 
 func TestFetchPropagatesClientError(t *testing.T) {
 	boom := errors.New("boom")
-	p := New("p", "http://example", fakeGetter{err: boom}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p := New("p", "http://example", fakeGetter{err: boom}, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	_, err := p.Fetch(context.Background())
 

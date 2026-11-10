@@ -27,12 +27,12 @@ type fakeProvider struct {
 
 func (f *fakeProvider) Name() string { return f.name }
 
-func (f *fakeProvider) Fetch(context.Context) ([]domain.Content, error) {
+func (f *fakeProvider) Fetch(context.Context) (provider.Feed, error) {
 	if f.block != nil {
 		close(f.started)
 		<-f.block
 	}
-	return f.contents, f.err
+	return provider.Feed{Contents: f.contents, Complete: true}, f.err
 }
 
 type fakeStore struct {

@@ -348,6 +348,17 @@ Geçersiz kayıtlar loglanıp atlanır.
 
 **ID çakışması:** Tekillik `(provider, external_id)` çifti üzerinden sağlanır, çünkü iki provider da `v1`, `v2`, `v3` ID'lerini kullanıyor.
 
+**Sayfalama:**
+- Provider'lar sayfa sayfa çekilir. İlk istek admin'in girdiği URL'ye gider; sonraki sayfalar için URL'ye `page=2`, `page=3`… eklenir, URL'deki diğer parametreler korunur.
+- Her sayfa isteği provider'ın rate limit'inden, retry'ından ve circuit breaker'ından geçer.
+- Bir sayfa bile başarısız olursa o provider'ın sync'i başarısız sayılır ve hiçbir şey yazılmaz. Böylece veritabanında yarım bir besleme olmaz.
+- **Ne zaman durulur:**
+  - Provider bir toplam bildiriyorsa (`pagination.total`, `meta.total_count`) o kadar kayıt alınınca akış tamamdır.
+  - Toplam bildirmiyorsa kısa ya da boş bir sayfa son sayfadır.
+  - Toplama ulaşılmadan boş sayfa gelirse ya da `PROVIDER_MAX_PAGES` (50) sınırına varılırsa, alınanlar yazılır ama akış "eksik" sayılır.
+- **Sayfa parametresini yok sayan provider'lar:** Statik dosyalar, ör. case'teki mock'lar, `page=2` isteğine yine ilk sayfayla cevap verir. Bu, dönen sayfa numarasından ya da tekrar eden kayıtlardan anlaşılır. Fetch o noktada durur: aynı kayıtlar mükerrer yazılmaz ve akış eksik sayılır (mock 150 kayıt bildiriyor ama 4 tane veriyor).
+- Fetch, kayıtların yanında akışın tam olup olmadığını da döndürür.
+
 **İstek limiti yönetimi:**
 - Her provider'ın kendi HTTP client'ı ve token bucket'ı var. Client provider başına cache'lenir, URL değişince yenisi oluşturulur.
 - Ağ hataları, `429` ve `5xx` yanıtları exponential backoff ile yeniden denenir; `429`'da `Retry-After` header'ına uyulur.
@@ -561,6 +572,7 @@ Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metrikler
 | `SYNC_INTERVAL` | `10m` | Periyodik senkronizasyon aralığı |
 | `PROVIDER_RATE_PER_SEC` / `PROVIDER_BURST` | `2` / `1` | Provider başına istek limiti |
 | `PROVIDER_MAX_RETRIES` / `PROVIDER_TIMEOUT` | `3` / `5s` | |
+| `PROVIDER_MAX_PAGES` | `50` | Bir fetch'te takip edilen en fazla sayfa |
 | `PROVIDER_BREAKER_FAILURE_THRESHOLD` | `5` | Provider devresini açan ardışık başarısız istek sayısı (`0` kapatır) |
 | `PROVIDER_BREAKER_OPEN_TIMEOUT` | `15m` | Provider devresinin açık kalma süresi |
 | `SCORE_VIDEO_COEFFICIENT` / `SCORE_TEXT_COEFFICIENT` | `1.5` / `1.0` | |
@@ -572,7 +584,6 @@ Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metrikler
 - **Serbest rol seçimi:** Yukarıda anlatıldığı gibi demo amaçlı. Gerçek bir sistemde admin yetkisi ayrı bir kanaldan verilmeli.
 - **Refresh token'ın saklandığı yer:** Dashboard'da `HttpOnly` cookie'ye taşınabilir.
 - **Kullanıcı yönetimi:** Rol değiştirme, kullanıcı silme ve şifre sıfırlama endpoint'leri yok. Süresi dolmuş refresh token'lar için periyodik bir temizlik job'ı eklenebilir.
-- **Provider sayfalama:** Mock yanıtlar statik olduğu için tek sayfa çekiliyor.
 - **Ölçeklenme:**
   - Birden fazla sse-service instance'ında periyodik sync'in tek kopyada çalışması için Postgres advisory lock kullanılabilir.
   - Offset pagination yerine keyset pagination kullanılabilir.
