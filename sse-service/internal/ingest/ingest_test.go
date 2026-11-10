@@ -45,6 +45,10 @@ type fakeStore struct {
 	kept       map[string][]string
 	removed    int
 	removeFail error
+	// unchanged makes every upsert report that nothing was written; rescored is what
+	// RecalculateScores reports.
+	unchanged bool
+	rescored  int
 }
 
 func (f *fakeStore) MarkRemoved(_ context.Context, provider string, keep []string, _ time.Time) (int, error) {
@@ -61,11 +65,14 @@ func (f *fakeStore) UpsertContents(_ context.Context, cs []domain.Content) (int,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.upserted = append(f.upserted, cs...)
+	if f.unchanged {
+		return 0, nil
+	}
 	return len(cs), nil
 }
 
 func (f *fakeStore) RecalculateScores(context.Context, time.Time, func(domain.Content) float64) (int, error) {
-	return 0, nil
+	return f.rescored, nil
 }
 
 func (f *fakeStore) RecordSyncRun(_ context.Context, run domain.SyncRun) error {
@@ -277,4 +284,29 @@ func TestSyncFailsWhenRemovalFails(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.SyncStatusFailed, report.Runs[0].Status)
 	assert.Contains(t, report.Runs[0].Error, "db down")
+}
+
+func TestSyncInvalidatesTheCacheOnlyWhenSomethingChanged(t *testing.T) {
+	item := []domain.Content{{ExternalID: "a", Type: domain.ContentTypeText}}
+	tests := []struct {
+		name  string
+		store *fakeStore
+		want  int
+	}{
+		{name: "nothing changed", store: &fakeStore{unchanged: true}, want: 0},
+		{name: "items changed", store: &fakeStore{}, want: 1},
+		{name: "items removed", store: &fakeStore{unchanged: true, removed: 1}, want: 1},
+		{name: "scores changed", store: &fakeStore{unchanged: true, rescored: 2}, want: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inv := &countingInvalidator{}
+			svc := newService(tt.store, inv, &fakeProvider{name: "feed", contents: item})
+
+			_, err := svc.Sync(context.Background())
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, inv.n)
+		})
+	}
 }

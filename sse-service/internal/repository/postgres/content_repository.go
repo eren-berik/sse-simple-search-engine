@@ -50,10 +50,20 @@ ON CONFLICT (provider, external_id) DO UPDATE SET
 	score_updated_at = EXCLUDED.score_updated_at,
 	raw_payload      = EXCLUDED.raw_payload,
 	removed_at       = NULL, -- returned again, so listed again
-	updated_at       = now()`
+	updated_at       = now()
+-- Unchanged rows are left alone: no write, no dead tuple, and the caller can tell whether the
+-- sync changed anything. score_updated_at is not compared; it only says when the score was computed.
+WHERE (contents.title, contents.type, contents.views, contents.likes, contents.duration_sec,
+       contents.reading_time, contents.reactions, contents.comments, contents.tags,
+       contents.published_at, contents.score, contents.raw_payload, contents.removed_at)
+   IS DISTINCT FROM
+      (EXCLUDED.title, EXCLUDED.type, EXCLUDED.views, EXCLUDED.likes, EXCLUDED.duration_sec,
+       EXCLUDED.reading_time, EXCLUDED.reactions, EXCLUDED.comments, EXCLUDED.tags,
+       EXCLUDED.published_at, EXCLUDED.score, EXCLUDED.raw_payload, NULL::timestamptz)`
 
 // UpsertContents inserts or updates items keyed by (provider, external_id) in a single transaction,
-// so a provider's batch is either stored completely or not at all.
+// so a provider's batch is either stored completely or not at all. Items identical to the stored
+// row are skipped; the result is the number of rows inserted or changed.
 func (r *ContentRepository) UpsertContents(ctx context.Context, contents []domain.Content) (int, error) {
 	if len(contents) == 0 {
 		return 0, nil
@@ -71,13 +81,23 @@ func (r *ContentRepository) UpsertContents(ctx context.Context, contents []domai
 			m.ReadingTime, m.Reactions, m.Comments, tags, c.PublishedAt, c.Score, c.ScoreUpdatedAt, c.RawPayload)
 	}
 
+	var changed int
 	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
-		return tx.SendBatch(ctx, batch).Close()
+		results := tx.SendBatch(ctx, batch)
+		for range contents {
+			tag, err := results.Exec()
+			if err != nil {
+				_ = results.Close()
+				return err
+			}
+			changed += int(tag.RowsAffected())
+		}
+		return results.Close()
 	})
 	if err != nil {
 		return 0, fmt.Errorf("upsert contents: %w", err)
 	}
-	return len(contents), nil
+	return changed, nil
 }
 
 // MarkRemoved marks the provider's listed items whose external id is not in keep as removed,
@@ -93,8 +113,10 @@ func (r *ContentRepository) MarkRemoved(ctx context.Context, provider string, ke
 	return int(tag.RowsAffected()), nil
 }
 
-// RecalculateScores recomputes the score of every item whose score is older than before.
-// Recency depends on the current time, so items no longer returned by providers would otherwise keep stale scores.
+// RecalculateScores recomputes the score of every listed item whose score was computed before
+// before: the items this sync did not write. Recency depends on the current time, so their
+// scores can go stale (e.g. leaving the "within a week" tier). Only scores that actually changed
+// are written; the result is how many.
 func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.Time, score func(domain.Content) float64) (int, error) {
 	var updated int
 	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
@@ -113,9 +135,14 @@ func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.T
 		now := time.Now()
 		batch := &pgx.Batch{}
 		for _, c := range stale {
-			batch.Queue(`UPDATE contents SET score = $2, score_updated_at = $3 WHERE id = $1`, c.ID, score(c), now)
+			if s := score(c); s != c.Score {
+				batch.Queue(`UPDATE contents SET score = $2, score_updated_at = $3, updated_at = now() WHERE id = $1`, c.ID, s, now)
+			}
 		}
-		updated = len(stale)
+		updated = batch.Len()
+		if updated == 0 {
+			return nil
+		}
 		return tx.SendBatch(ctx, batch).Close()
 	})
 	if err != nil {
