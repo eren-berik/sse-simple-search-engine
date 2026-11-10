@@ -38,6 +38,8 @@ const (
 const (
 	versionKey   = "search:version"
 	queryTimeout = 5 * time.Second
+	// warmTimeout bounds warming as a whole; it runs on the caller's path after invalidation.
+	warmTimeout = 5 * time.Second
 )
 
 type Service struct {
@@ -47,10 +49,19 @@ type Service struct {
 	scorer *scoring.Scorer
 	log    *slog.Logger
 	group  singleflight.Group
+	// warm are searched right after every invalidation; see WithWarmQueries.
+	warm []domain.SearchQuery
 }
 
 func NewService(repo ContentSearcher, c cache.Cache, ttl time.Duration, scorer *scoring.Scorer, log *slog.Logger) *Service {
 	return &Service{repo: repo, cache: c, ttl: ttl, scorer: scorer, log: log}
+}
+
+// WithWarmQueries makes every invalidation refill the cache for qs, typically the searches a
+// dashboard runs when it opens. Otherwise the first users after each sync would all miss.
+func (s *Service) WithWarmQueries(qs []domain.SearchQuery) *Service {
+	s.warm = qs
+	return s
 }
 
 // Search validates q and returns matching contents, serving from cache when possible.
@@ -111,11 +122,33 @@ func (s *Service) Get(ctx context.Context, id int64) (domain.Content, scoring.Br
 
 // Invalidate makes every cached search stale by bumping the global version embedded in cache keys.
 // Old entries are never read again and expire through their TTL, so no key scanning is needed.
+// The warm queries are then searched again, so the most common searches stay cached.
 func (s *Service) Invalidate(ctx context.Context) error {
 	if _, err := s.cache.Incr(ctx, versionKey); err != nil {
 		return fmt.Errorf("invalidate search cache: %w", err)
 	}
+	s.warmUp(ctx)
 	return nil
+}
+
+// warmUp searches the warm queries, which caches their results under the new version. Failures
+// are logged: a query that could not be warmed is simply computed by its first user.
+func (s *Service) warmUp(ctx context.Context) {
+	if len(s.warm) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, warmTimeout)
+	defer cancel()
+	start := time.Now()
+	warmed := 0
+	for _, q := range s.warm {
+		if _, status, err := s.Search(ctx, q); err != nil {
+			s.log.WarnContext(ctx, "warming a cached search failed", "error", err)
+		} else if status != CacheBypass {
+			warmed++
+		}
+	}
+	s.log.InfoContext(ctx, "search cache warmed", "queries", warmed, "duration", time.Since(start))
 }
 
 func (s *Service) cacheKey(ctx context.Context, q domain.SearchQuery) (string, error) {

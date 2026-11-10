@@ -173,3 +173,30 @@ func TestCacheKeyCoversEveryFilter(t *testing.T) {
 		keys[name] = key
 	}
 }
+
+func TestInvalidateWarmsTheCommonSearches(t *testing.T) {
+	repo := &fakeRepo{result: sampleResult()}
+	warm := []domain.SearchQuery{{PerPage: 10}, {Type: domain.ContentTypeVideo, PerPage: 10}}
+	svc := newService(repo, cache.NewMemory()).WithWarmQueries(warm)
+	ctx := context.Background()
+
+	require.NoError(t, svc.Invalidate(ctx))
+	assert.Equal(t, int32(2), repo.calls.Load(), "each warm query is computed once")
+
+	for _, q := range warm {
+		_, status, err := svc.Search(ctx, q)
+		require.NoError(t, err)
+		assert.Equal(t, CacheHit, status, "served from the warmed cache")
+	}
+	_, status, err := svc.Search(ctx, domain.SearchQuery{Keyword: "go"})
+	require.NoError(t, err)
+	assert.Equal(t, CacheMiss, status, "other searches are computed on demand")
+	assert.Equal(t, int32(3), repo.calls.Load())
+}
+
+func TestWarmingFailuresDoNotFailInvalidation(t *testing.T) {
+	repo := &fakeRepo{err: errors.New("db down")}
+	svc := newService(repo, cache.NewMemory()).WithWarmQueries([]domain.SearchQuery{{}})
+
+	assert.NoError(t, svc.Invalidate(context.Background()))
+}
