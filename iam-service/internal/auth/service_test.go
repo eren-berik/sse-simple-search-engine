@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -19,7 +20,7 @@ import (
 
 type fakeSigner struct{}
 
-func (fakeSigner) Sign(subject, username string, role jwtauth.Role) (string, time.Time, error) {
+func (fakeSigner) Sign(subject, username string, role jwtauth.Role, sessionID string) (string, time.Time, error) {
 	return "access:" + subject + ":" + string(role), time.Now().Add(time.Minute), nil
 }
 
@@ -157,4 +158,82 @@ func TestLogout(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.NoError(t, svc.Logout(context.Background(), "unknown"), "logout is idempotent")
+}
+
+// sessionSigner returns the session id as the access token, so tests can see which session a
+// token belongs to.
+type sessionSigner struct{}
+
+func (sessionSigner) Sign(_, _ string, _ jwtauth.Role, sessionID string) (string, time.Time, error) {
+	return sessionID, time.Now().Add(time.Minute), nil
+}
+
+type recordingRevoker struct {
+	sessions []string
+	ttl      time.Duration
+	err      error
+}
+
+func (r *recordingRevoker) Revoke(_ context.Context, sessionID string, ttl time.Duration) error {
+	r.sessions = append(r.sessions, sessionID)
+	r.ttl = ttl
+	return r.err
+}
+
+func newRevokingService(t *testing.T, revoker *recordingRevoker) *Service {
+	t.Helper()
+	svc, err := NewService(authtest.NewMemoryStore(), BcryptHasher{Cost: bcrypt.MinCost}, sessionSigner{},
+		Config{RefreshTokenTTL: time.Hour, Revoker: revoker, RevocationTTL: 16 * time.Minute},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	require.NoError(t, err)
+	return svc
+}
+
+func TestSessionsAndRevocation(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("tokens carry their session; refresh keeps it, login starts a new one", func(t *testing.T) {
+		svc := newRevokingService(t, &recordingRevoker{})
+		first := register(t, svc, "alice", "viewer")
+		require.NotEmpty(t, first.AccessToken)
+
+		refreshed, err := svc.Refresh(ctx, first.RefreshToken)
+		require.NoError(t, err)
+		assert.Equal(t, first.AccessToken, refreshed.AccessToken, "same session id")
+
+		second, err := svc.Login(ctx, "alice", "s3cret-pass")
+		require.NoError(t, err)
+		assert.NotEqual(t, first.AccessToken, second.AccessToken)
+	})
+
+	t.Run("logout revokes the session's access tokens", func(t *testing.T) {
+		revoker := &recordingRevoker{}
+		svc := newRevokingService(t, revoker)
+		s := register(t, svc, "alice", "viewer")
+
+		require.NoError(t, svc.Logout(ctx, s.RefreshToken))
+		assert.Equal(t, []string{s.AccessToken}, revoker.sessions)
+		assert.Equal(t, 16*time.Minute, revoker.ttl)
+
+		require.NoError(t, svc.Logout(ctx, "unknown-token"))
+		assert.Len(t, revoker.sessions, 1, "unknown tokens revoke nothing")
+	})
+
+	t.Run("refresh token reuse revokes the session", func(t *testing.T) {
+		revoker := &recordingRevoker{}
+		svc := newRevokingService(t, revoker)
+		s := register(t, svc, "alice", "viewer")
+		_, err := svc.Refresh(ctx, s.RefreshToken)
+		require.NoError(t, err)
+
+		_, err = svc.Refresh(ctx, s.RefreshToken)
+		assert.ErrorIs(t, err, domain.ErrInvalidRefreshToken)
+		assert.Equal(t, []string{s.AccessToken}, revoker.sessions)
+	})
+
+	t.Run("a failing revocation list does not fail logout", func(t *testing.T) {
+		svc := newRevokingService(t, &recordingRevoker{err: errors.New("redis down")})
+		s := register(t, svc, "alice", "viewer")
+		assert.NoError(t, svc.Logout(ctx, s.RefreshToken))
+	})
 }

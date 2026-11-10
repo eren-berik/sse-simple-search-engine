@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/internal/auth"
 	"github.com/eren-berik/sse-simple-search-engine/iam-service/internal/config"
@@ -29,6 +30,7 @@ type application struct {
 	cfg     config.Config
 	log     *slog.Logger
 	pool    *pgxpool.Pool
+	redis   *redis.Client // nil when REDIS_URL is not set
 	http    *fiber.App
 	metrics *metrics.Server
 }
@@ -53,9 +55,27 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		TTL:      cfg.AccessTokenTTL,
 	})
 	verifier := jwtauth.NewVerifier(signer.KeySource(), cfg.JWTIssuer, cfg.JWTAudience[0])
+	authCfg := auth.Config{RefreshTokenTTL: cfg.RefreshTokenTTL}
+	optional := map[string]httpx.Check{}
 
-	authSvc, err := auth.NewService(postgres.NewStore(pool), auth.BcryptHasher{Cost: cfg.BcryptCost}, signer,
-		auth.Config{RefreshTokenTTL: cfg.RefreshTokenTTL}, log)
+	if cfg.RedisURL != "" {
+		opts, err := redis.ParseURL(cfg.RedisURL)
+		if err != nil {
+			app.close()
+			return nil, fmt.Errorf("parse redis url: %w", err)
+		}
+		app.redis = redis.NewClient(opts)
+		revocations := jwtauth.NewSessionRevocations(app.redis, log)
+		authCfg.Revoker = revocations
+		// Verifiers accept tokens up to their clock leeway (30s) past expiry; a minute covers it.
+		authCfg.RevocationTTL = cfg.AccessTokenTTL + time.Minute
+		verifier.WithRevocations(revocations)
+		optional["redis"] = func(ctx context.Context) error { return app.redis.Ping(ctx).Err() }
+	} else {
+		log.Warn("REDIS_URL not set; access tokens stay valid until they expire after logout")
+	}
+
+	authSvc, err := auth.NewService(postgres.NewStore(pool), auth.BcryptHasher{Cost: cfg.BcryptCost}, signer, authCfg, log)
 	if err != nil {
 		app.close()
 		return nil, err
@@ -68,7 +88,7 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		Auth:       handler.NewAuthHandler(telemetry.InstrumentAuthenticator(reg, authSvc)),
 		Signer:     signer,
 		Verifier:   verifier,
-		Ready:      httpx.Ready(map[string]httpx.Check{"database": pool.Ping}, nil),
+		Ready:      httpx.Ready(map[string]httpx.Check{"database": pool.Ping}, optional),
 		Log:        log,
 		Instrument: metrics.HTTP(reg),
 	})
@@ -78,6 +98,11 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 func (a *application) close() {
 	if a.pool != nil {
 		a.pool.Close()
+	}
+	if a.redis != nil {
+		if err := a.redis.Close(); err != nil {
+			a.log.Warn("closing redis", "error", err)
+		}
 	}
 }
 

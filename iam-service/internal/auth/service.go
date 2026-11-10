@@ -29,12 +29,19 @@ type Store interface {
 	// and ErrInvalidRefreshToken if it is unknown or expired.
 	ConsumeRefreshToken(ctx context.Context, hash []byte, now time.Time) (domain.RefreshToken, error)
 	RevokeFamily(ctx context.Context, familyID string, now time.Time) error
-	RevokeFamilyByTokenHash(ctx context.Context, hash []byte, now time.Time) error
+	// RevokeFamilyByTokenHash revokes the family of the token and returns its id ("" if unknown).
+	RevokeFamilyByTokenHash(ctx context.Context, hash []byte, now time.Time) (string, error)
 }
 
 // TokenSigner issues access tokens.
 type TokenSigner interface {
-	Sign(subject, username string, role jwtauth.Role) (string, time.Time, error)
+	Sign(subject, username string, role jwtauth.Role, sessionID string) (string, time.Time, error)
+}
+
+// SessionRevoker makes a session's access tokens invalid before they expire. Refresh tokens
+// are revoked in the store; access tokens are not stored, so verifiers consult this list.
+type SessionRevoker interface {
+	Revoke(ctx context.Context, sessionID string, ttl time.Duration) error
 }
 
 // Session is the result of a successful register, login or refresh.
@@ -55,6 +62,11 @@ type RegisterInput struct {
 type Config struct {
 	RefreshTokenTTL time.Duration
 	Now             func() time.Time
+	// Revoker is optional. Without it a revoked session's access tokens stay valid until they
+	// expire; with it they are rejected immediately. RevocationTTL must cover the longest
+	// remaining lifetime of an access token (its TTL plus the verifiers' clock leeway).
+	Revoker       SessionRevoker
+	RevocationTTL time.Duration
 }
 
 type Service struct {
@@ -145,6 +157,8 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (Session, er
 		if rerr := s.store.RevokeFamily(ctx, stored.FamilyID, now); rerr != nil {
 			return Session{}, fmt.Errorf("revoke token family: %w", rerr)
 		}
+		// The thief may also hold an access token of this session.
+		s.revokeSession(ctx, stored.FamilyID)
 		return Session{}, domain.ErrInvalidRefreshToken
 	}
 	if err != nil {
@@ -162,9 +176,29 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (Session, er
 	return s.startSession(ctx, user, stored.FamilyID)
 }
 
-// Logout revokes the session the refresh token belongs to. Unknown tokens are ignored.
+// Logout revokes the session the refresh token belongs to: its refresh tokens and the access
+// tokens issued for it. Unknown tokens are ignored.
 func (s *Service) Logout(ctx context.Context, refreshToken string) error {
-	return s.store.RevokeFamilyByTokenHash(ctx, hashToken(refreshToken), s.cfg.Now())
+	familyID, err := s.store.RevokeFamilyByTokenHash(ctx, hashToken(refreshToken), s.cfg.Now())
+	if err != nil {
+		return err
+	}
+	if familyID != "" {
+		s.revokeSession(ctx, familyID)
+	}
+	return nil
+}
+
+// revokeSession rejects the session's access tokens. A failure is logged, not returned: the
+// refresh tokens are already revoked, and the access tokens expire on their own.
+func (s *Service) revokeSession(ctx context.Context, sessionID string) {
+	if s.cfg.Revoker == nil {
+		return
+	}
+	if err := s.cfg.Revoker.Revoke(ctx, sessionID, s.cfg.RevocationTTL); err != nil {
+		s.log.WarnContext(ctx, "revoking session access tokens failed; they stay valid until they expire",
+			"session_id", sessionID, "error", err)
+	}
 }
 
 // User returns a user by id.
@@ -173,8 +207,15 @@ func (s *Service) User(ctx context.Context, id string) (domain.User, error) {
 }
 
 // startSession issues an access token and a refresh token. An empty familyID starts a new family.
+// The family id is the session id carried by the access token.
 func (s *Service) startSession(ctx context.Context, user domain.User, familyID string) (Session, error) {
-	access, accessExp, err := s.signer.Sign(user.ID, user.Username, user.Role)
+	if familyID == "" {
+		var err error
+		if familyID, err = newID(); err != nil {
+			return Session{}, err
+		}
+	}
+	access, accessExp, err := s.signer.Sign(user.ID, user.Username, user.Role, familyID)
 	if err != nil {
 		return Session{}, err
 	}
@@ -182,11 +223,6 @@ func (s *Service) startSession(ctx context.Context, user domain.User, familyID s
 	refresh, err := newRefreshToken()
 	if err != nil {
 		return Session{}, err
-	}
-	if familyID == "" {
-		if familyID, err = newID(); err != nil {
-			return Session{}, err
-		}
 	}
 	refreshExp := s.cfg.Now().Add(s.cfg.RefreshTokenTTL)
 	if err := s.store.CreateRefreshToken(ctx, domain.RefreshToken{

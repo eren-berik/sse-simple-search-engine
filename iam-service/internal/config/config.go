@@ -28,6 +28,10 @@ type Config struct {
 	RefreshTokenTTL   time.Duration `env:"REFRESH_TOKEN_TTL" envDefault:"168h"`
 
 	BcryptCost int `env:"BCRYPT_COST" envDefault:"12"`
+
+	// RedisURL holds the list of revoked sessions shared with the verifiers. Optional: without
+	// it, logout still revokes refresh tokens, but access tokens stay valid until they expire.
+	RedisURL string `env:"REDIS_URL"`
 }
 
 func Load() (Config, error) {

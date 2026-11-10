@@ -34,12 +34,16 @@ services:
     build: ./iam-service
     environment:
       DATABASE_URL: postgres://app:app@postgres:5432/iam?sslmode=disable
+      # Revoked sessions; the gateway and sse-service read the same list.
+      REDIS_URL: redis://redis:6379/0
       JWT_PRIVATE_KEY_FILE: ${JWT_PRIVATE_KEY_FILE:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - ./deploy/keys:/keys:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
