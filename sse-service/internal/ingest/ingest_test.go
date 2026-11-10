@@ -18,11 +18,13 @@ import (
 )
 
 type fakeProvider struct {
-	name     string
-	contents []domain.Content
-	err      error
-	started  chan struct{}
-	block    chan struct{}
+	name       string
+	contents   []domain.Content
+	incomplete bool
+	skipped    int
+	err        error
+	started    chan struct{}
+	block      chan struct{}
 }
 
 func (f *fakeProvider) Name() string { return f.name }
@@ -32,13 +34,27 @@ func (f *fakeProvider) Fetch(context.Context) (provider.Feed, error) {
 		close(f.started)
 		<-f.block
 	}
-	return provider.Feed{Contents: f.contents, Complete: true}, f.err
+	return provider.Feed{Contents: f.contents, Complete: !f.incomplete, Skipped: f.skipped}, f.err
 }
 
 type fakeStore struct {
 	mu       sync.Mutex
 	upserted []domain.Content
 	runs     []domain.SyncRun
+	// kept records MarkRemoved calls: provider name -> ids to keep.
+	kept       map[string][]string
+	removed    int
+	removeFail error
+}
+
+func (f *fakeStore) MarkRemoved(_ context.Context, provider string, keep []string, _ time.Time) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.kept == nil {
+		f.kept = map[string][]string{}
+	}
+	f.kept[provider] = keep
+	return f.removed, f.removeFail
 }
 
 func (f *fakeStore) UpsertContents(_ context.Context, cs []domain.Content) (int, error) {
@@ -214,4 +230,51 @@ func TestSyncRecordsBuildFailures(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.SyncStatusFailed, report.Runs[0].Status)
 	assert.Len(t, store.runs, 1)
+}
+
+func TestSyncRemovesVanishedItemsOnlyFromCompleteFeeds(t *testing.T) {
+	items := []domain.Content{{ExternalID: "a", Type: domain.ContentTypeText}, {ExternalID: "b", Type: domain.ContentTypeText}}
+	tests := []struct {
+		name       string
+		provider   fakeProvider
+		wantMarked bool
+	}{
+		{name: "complete feed", provider: fakeProvider{contents: items}, wantMarked: true},
+		{name: "incomplete feed", provider: fakeProvider{contents: items, incomplete: true}},
+		{name: "items could not be read", provider: fakeProvider{contents: items, skipped: 1}},
+		{name: "empty feed", provider: fakeProvider{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{removed: 3}
+			p := tt.provider
+			p.name = "feed"
+			svc := newService(store, &countingInvalidator{}, &p)
+
+			report, err := svc.Sync(context.Background())
+
+			require.NoError(t, err)
+			run := report.Runs[0]
+			assert.Equal(t, domain.SyncStatusSuccess, run.Status)
+			if tt.wantMarked {
+				assert.Equal(t, []string{"a", "b"}, store.kept["feed"], "every returned item is kept")
+				assert.Equal(t, 3, run.Removed)
+				assert.Equal(t, 3, store.runs[0].Removed, "the count is recorded with the run")
+			} else {
+				assert.NotContains(t, store.kept, "feed", "nothing may be removed")
+				assert.Equal(t, 0, run.Removed)
+			}
+		})
+	}
+}
+
+func TestSyncFailsWhenRemovalFails(t *testing.T) {
+	store := &fakeStore{removeFail: errors.New("db down")}
+	svc := newService(store, &countingInvalidator{}, &fakeProvider{name: "feed", contents: []domain.Content{{ExternalID: "a", Type: domain.ContentTypeText}}})
+
+	report, err := svc.Sync(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.SyncStatusFailed, report.Runs[0].Status)
+	assert.Contains(t, report.Runs[0].Error, "db down")
 }

@@ -555,6 +555,7 @@ components:
         status: { type: string, enum: [success, failed] }
         fetched: { type: integer }
         upserted: { type: integer }
+        removed: { type: integer, description: 'Stored items hidden because the provider no longer returns them; only counted after a complete feed' }
         error: { type: string }
 
     Error:

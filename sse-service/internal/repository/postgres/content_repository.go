@@ -19,6 +19,9 @@ const contentColumns = `id, provider, external_id, title, type, views, likes, du
 // enabledProviderCond restricts queries to contents whose provider is enabled.
 const enabledProviderCond = `EXISTS (SELECT 1 FROM providers p WHERE p.name = contents.provider AND p.enabled)`
 
+// listedCond is what users can see: items of enabled providers that the provider still returns.
+const listedCond = `removed_at IS NULL AND ` + enabledProviderCond
+
 // ContentRepository stores content items and serves searches using PostgreSQL full-text search.
 type ContentRepository struct {
 	pool *pgxpool.Pool
@@ -46,6 +49,7 @@ ON CONFLICT (provider, external_id) DO UPDATE SET
 	score            = EXCLUDED.score,
 	score_updated_at = EXCLUDED.score_updated_at,
 	raw_payload      = EXCLUDED.raw_payload,
+	removed_at       = NULL, -- returned again, so listed again
 	updated_at       = now()`
 
 // UpsertContents inserts or updates items keyed by (provider, external_id) in a single transaction,
@@ -76,12 +80,25 @@ func (r *ContentRepository) UpsertContents(ctx context.Context, contents []domai
 	return len(contents), nil
 }
 
+// MarkRemoved marks the provider's listed items whose external id is not in keep as removed,
+// and returns how many it marked. Call it only with a provider's complete feed.
+func (r *ContentRepository) MarkRemoved(ctx context.Context, provider string, keep []string, now time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE contents SET removed_at = $3, updated_at = now()
+		WHERE provider = $1 AND removed_at IS NULL AND NOT (external_id = ANY($2))`,
+		provider, keep, now)
+	if err != nil {
+		return 0, fmt.Errorf("mark removed contents: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // RecalculateScores recomputes the score of every item whose score is older than before.
 // Recency depends on the current time, so items no longer returned by providers would otherwise keep stale scores.
 func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.Time, score func(domain.Content) float64) (int, error) {
 	var updated int
 	err := pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+contentColumns+` FROM contents WHERE score_updated_at < $1 FOR UPDATE`, before)
+		rows, err := tx.Query(ctx, `SELECT `+contentColumns+` FROM contents WHERE score_updated_at < $1 AND removed_at IS NULL FOR UPDATE`, before)
 		if err != nil {
 			return err
 		}
@@ -113,7 +130,7 @@ func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.T
 func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, error) {
 	args := pgx.NamedArgs{"limit": q.PerPage, "offset": q.Offset()}
 	// Contents of disabled providers stay stored but are hidden until the provider is enabled again.
-	conds := []string{enabledProviderCond}
+	conds := []string{listedCond}
 	relevance := "0::float8"
 
 	if q.Keyword != "" {
@@ -181,7 +198,7 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 
 // GetByID returns a single content item, or domain.ErrNotFound if it does not exist or its provider is disabled.
 func (r *ContentRepository) GetByID(ctx context.Context, id int64) (domain.Content, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+contentColumns+` FROM contents WHERE id = $1 AND `+enabledProviderCond, id)
+	rows, err := r.pool.Query(ctx, `SELECT `+contentColumns+` FROM contents WHERE id = $1 AND `+listedCond, id)
 	if err != nil {
 		return domain.Content{}, fmt.Errorf("get content: %w", err)
 	}
@@ -198,9 +215,9 @@ func (r *ContentRepository) GetByID(ctx context.Context, id int64) (domain.Conte
 // RecordSyncRun persists the outcome of a provider sync.
 func (r *ContentRepository) RecordSyncRun(ctx context.Context, run domain.SyncRun) error {
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO sync_runs (provider, started_at, finished_at, status, fetched, upserted, error)
-		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))`,
-		run.Provider, run.StartedAt, run.FinishedAt, string(run.Status), run.Fetched, run.Upserted, run.Error)
+		INSERT INTO sync_runs (provider, started_at, finished_at, status, fetched, upserted, removed, error)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NULLIF($8, ''))`,
+		run.Provider, run.StartedAt, run.FinishedAt, string(run.Status), run.Fetched, run.Upserted, run.Removed, run.Error)
 	if err != nil {
 		return fmt.Errorf("record sync run: %w", err)
 	}
@@ -209,7 +226,7 @@ func (r *ContentRepository) RecordSyncRun(ctx context.Context, run domain.SyncRu
 
 // CountContents returns how many items are stored per provider and type.
 func (r *ContentRepository) CountContents(ctx context.Context) ([]domain.ContentCount, error) {
-	rows, err := r.pool.Query(ctx, `SELECT provider, type, count(*) FROM contents GROUP BY provider, type`)
+	rows, err := r.pool.Query(ctx, `SELECT provider, type, count(*) FROM contents WHERE removed_at IS NULL GROUP BY provider, type`)
 	if err != nil {
 		return nil, fmt.Errorf("count contents: %w", err)
 	}
@@ -227,7 +244,7 @@ func (r *ContentRepository) CountContents(ctx context.Context) ([]domain.Content
 // LatestSyncRuns returns the most recent sync run of each provider.
 func (r *ContentRepository) LatestSyncRuns(ctx context.Context) ([]domain.SyncRun, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT DISTINCT ON (provider) provider, started_at, finished_at, status, fetched, upserted, COALESCE(error, '')
+		SELECT DISTINCT ON (provider) provider, started_at, finished_at, status, fetched, upserted, removed, COALESCE(error, '')
 		FROM sync_runs
 		-- a run recorded while its provider was being deleted must not resurface
 		WHERE provider IN (SELECT name FROM providers)
@@ -237,7 +254,7 @@ func (r *ContentRepository) LatestSyncRuns(ctx context.Context) ([]domain.SyncRu
 	}
 	runs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.SyncRun, error) {
 		var s domain.SyncRun
-		err := row.Scan(&s.Provider, &s.StartedAt, &s.FinishedAt, &s.Status, &s.Fetched, &s.Upserted, &s.Error)
+		err := row.Scan(&s.Provider, &s.StartedAt, &s.FinishedAt, &s.Status, &s.Fetched, &s.Upserted, &s.Removed, &s.Error)
 		return s, err
 	})
 	if err != nil {

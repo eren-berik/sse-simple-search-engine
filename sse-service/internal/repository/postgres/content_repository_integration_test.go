@@ -272,3 +272,55 @@ func TestSearchByTagAndDate(t *testing.T) {
 
 	assert.Empty(t, titles(search(t, repo, domain.SearchQuery{Tag: "nope"})))
 }
+
+func TestMarkRemovedHidesAndRestores(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+	ctx := context.Background()
+	docker := func() []string {
+		return titles(search(t, repo, domain.SearchQuery{Keyword: "docker"}))
+	}
+	require.Equal(t, []string{"Introduction to Docker"}, docker())
+
+	// provider2 now returns everything except the Docker video (external id v1).
+	removed, err := repo.MarkRemoved(ctx, "provider2", []string{"v2", "v3", "a1"}, fixedNow)
+	require.NoError(t, err)
+	assert.Equal(t, 1, removed)
+
+	assert.Empty(t, docker(), "a removed item is not searchable")
+	all := search(t, repo, domain.SearchQuery{PerPage: 100})
+	assert.Equal(t, 7, all.Total)
+	counts, err := repo.CountContents(ctx)
+	require.NoError(t, err)
+	var provider2 int64
+	for _, c := range counts {
+		if c.Provider == "provider2" {
+			provider2 += c.Count
+		}
+	}
+	assert.Equal(t, int64(3), provider2, "removed items are not counted")
+
+	again, err := repo.MarkRemoved(ctx, "provider2", []string{"v2", "v3", "a1"}, fixedNow)
+	require.NoError(t, err)
+	assert.Zero(t, again, "already removed items are not counted twice")
+	other, err := repo.MarkRemoved(ctx, "provider1", []string{"v1", "v2", "v3", "v4"}, fixedNow)
+	require.NoError(t, err)
+	assert.Zero(t, other, "only the given provider is affected")
+
+	// The provider returns it again: the upsert lists it again.
+	seed(t, repo)
+	assert.Equal(t, []string{"Introduction to Docker"}, docker())
+}
+
+func TestSyncRunRecordsRemovals(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	ctx := context.Background()
+	require.NoError(t, repo.RecordSyncRun(ctx, domain.SyncRun{
+		Provider: "provider2", StartedAt: fixedNow, FinishedAt: fixedNow, Status: domain.SyncStatusSuccess, Fetched: 3, Upserted: 3, Removed: 1,
+	}))
+
+	runs, err := repo.LatestSyncRuns(ctx)
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.Equal(t, 1, runs[0].Removed)
+}
