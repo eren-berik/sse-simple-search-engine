@@ -121,13 +121,22 @@ func (s *Store) RevokeFamily(ctx context.Context, familyID string, now time.Time
 	return nil
 }
 
-func (s *Store) RevokeFamilyByTokenHash(ctx context.Context, hash []byte, now time.Time) error {
-	_, err := s.pool.Exec(ctx, `
-		UPDATE refresh_tokens SET revoked_at = $2
-		WHERE revoked_at IS NULL
-		  AND family_id = (SELECT family_id FROM refresh_tokens WHERE token_hash = $1)`, hash, now)
-	if err != nil {
-		return fmt.Errorf("revoke token family: %w", err)
+func (s *Store) RevokeFamilyByTokenHash(ctx context.Context, hash []byte, now time.Time) (string, error) {
+	// The family id is returned even when it was already revoked, so a repeated logout still
+	// revokes the session's access tokens.
+	var familyID string
+	err := s.pool.QueryRow(ctx, `
+		WITH family AS (SELECT family_id FROM refresh_tokens WHERE token_hash = $1),
+		     revoked AS (
+		         UPDATE refresh_tokens SET revoked_at = $2
+		         WHERE revoked_at IS NULL AND family_id = (SELECT family_id FROM family)
+		     )
+		SELECT family_id FROM family`, hash, now).Scan(&familyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
 	}
-	return nil
+	if err != nil {
+		return "", fmt.Errorf("revoke token family: %w", err)
+	}
+	return familyID, nil
 }

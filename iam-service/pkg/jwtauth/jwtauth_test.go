@@ -43,7 +43,7 @@ func newSigner(t *testing.T, now time.Time) *Signer {
 
 func TestSignAndVerify(t *testing.T) {
 	s := newSigner(t, time.Now())
-	token, exp, err := s.Sign("user-1", "alice", RoleAdmin)
+	token, exp, err := s.Sign("user-1", "alice", RoleAdmin, "session-1")
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now().Add(15*time.Minute), exp, time.Second)
 
@@ -58,16 +58,16 @@ func TestSignAndVerify(t *testing.T) {
 
 func TestVerifyRejects(t *testing.T) {
 	s := newSigner(t, time.Now())
-	valid, _, err := s.Sign("user-1", "alice", RoleViewer)
+	valid, _, err := s.Sign("user-1", "alice", RoleViewer, "session-1")
 	require.NoError(t, err)
 
-	expired, _, err := newSigner(t, time.Now().Add(-time.Hour)).Sign("user-1", "alice", RoleViewer)
+	expired, _, err := newSigner(t, time.Now().Add(-time.Hour)).Sign("user-1", "alice", RoleViewer, "session-1")
 	require.NoError(t, err)
 
 	otherKey, err := GenerateKey(2048)
 	require.NoError(t, err)
 	foreign, _, err := NewSigner(SignerConfig{Key: otherKey, Issuer: "iam", Audience: []string{"sse"}, TTL: time.Minute}).
-		Sign("user-1", "alice", RoleAdmin)
+		Sign("user-1", "alice", RoleAdmin, "session-1")
 	require.NoError(t, err)
 
 	hs := jwt.NewWithClaims(jwt.SigningMethodHS256, Claims{Role: RoleAdmin, RegisteredClaims: jwt.RegisteredClaims{
@@ -126,8 +126,8 @@ func TestMiddleware(t *testing.T) {
 	})
 	app.Get("/admin", auth, RequireRole(RoleAdmin), func(c *fiber.Ctx) error { return c.SendString("ok") })
 
-	admin, _, _ := s.Sign("1", "root", RoleAdmin)
-	viewer, _, _ := s.Sign("2", "bob", RoleViewer)
+	admin, _, _ := s.Sign("1", "root", RoleAdmin, "s1")
+	viewer, _, _ := s.Sign("2", "bob", RoleViewer, "s2")
 
 	call := func(path, header string) int {
 		req := httptest.NewRequest(http.MethodGet, path, nil)

@@ -34,16 +34,33 @@ func (s StaticKeySource) Key(_ context.Context, kid string) (*rsa.PublicKey, err
 	return nil, ErrUnknownKey
 }
 
-// Verifier validates access tokens: RS256 only, known key, issuer, audience and expiry.
+// ErrRevoked means the token's session was ended (logout, stolen refresh token) before the
+// token expired. It wraps ErrInvalidToken, so callers treat it like any other invalid token.
+var ErrRevoked = fmt.Errorf("%w: session revoked", ErrInvalidToken)
+
+// RevocationChecker reports whether a session was revoked.
+type RevocationChecker interface {
+	IsRevoked(ctx context.Context, sessionID string) bool
+}
+
+// Verifier validates access tokens: RS256 only, known key, issuer, audience, expiry and, when
+// configured, that the token's session has not been revoked.
 type Verifier struct {
-	keys     KeySource
-	issuer   string
-	audience string
-	leeway   time.Duration
+	keys        KeySource
+	issuer      string
+	audience    string
+	leeway      time.Duration
+	revocations RevocationChecker
 }
 
 func NewVerifier(keys KeySource, issuer, audience string) *Verifier {
 	return &Verifier{keys: keys, issuer: issuer, audience: audience, leeway: 30 * time.Second}
+}
+
+// WithRevocations makes the verifier reject tokens of revoked sessions.
+func (v *Verifier) WithRevocations(r RevocationChecker) *Verifier {
+	v.revocations = r
+	return v
 }
 
 // Verify parses and validates raw. Errors wrap ErrInvalidToken, or ErrKeysUnavailable when the
@@ -71,6 +88,9 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (*Claims, error) {
 	}
 	if claims.Subject == "" || !claims.Role.Valid() {
 		return nil, fmt.Errorf("%w: missing subject or role", ErrInvalidToken)
+	}
+	if v.revocations != nil && claims.SessionID != "" && v.revocations.IsRevoked(ctx, claims.SessionID) {
+		return nil, ErrRevoked
 	}
 	return claims, nil
 }

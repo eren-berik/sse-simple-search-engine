@@ -83,7 +83,7 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		SSEGuard:        sseGuard.Guard,
 		Ready:           httpx.Ready(required, optional),
 		Log:             log,
-		Verifier:        jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
+		Verifier:        newVerifier(keys, cfg, app.redis, log),
 		RateLimits: middleware.RateLimits{
 			IP:      middleware.Limit{Max: cfg.IPRateLimitMax, Window: cfg.IPRateLimitWindow},
 			Auth:    middleware.Limit{Max: cfg.AuthRateLimitMax, Window: cfg.AuthRateLimitWindow},
@@ -124,4 +124,14 @@ func upstreamCheck(client *http.Client, baseURL string) httpx.Check {
 		}
 		return nil
 	}
+}
+
+// newVerifier checks access tokens against the identity service's keys and, when Redis is
+// configured, against the sessions it revoked (logout, stolen refresh token).
+func newVerifier(keys jwtauth.KeySource, cfg config.Config, rdb *redis.Client, log *slog.Logger) *jwtauth.Verifier {
+	v := jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience)
+	if rdb != nil {
+		v.WithRevocations(jwtauth.NewSessionRevocations(rdb, log))
+	}
+	return v
 }

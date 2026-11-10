@@ -209,13 +209,20 @@ Provider'lara giden istekler gateway'den geçmez. Onların rate limit, retry ve 
 
 | | Access token | Refresh token |
 |---|---|---|
-| Biçim | JWT, **RS256** imzalı. Claim'ler: `sub` (user id), `username`, `role`, `iss`, `aud`, `exp`, `jti` | 256 bit rastgele, opaque |
+| Biçim | JWT, **RS256** imzalı. Claim'ler: `sub` (user id), `username`, `role`, `sid` (oturum), `iss`, `aud`, `exp`, `jti` | 256 bit rastgele, opaque |
 | Ömür | 15 dakika (`ACCESS_TOKEN_TTL`) | 7 gün (`REFRESH_TOKEN_TTL`) |
-| Saklama | Saklanmaz, imza ile doğrulanır | DB'de sadece **SHA-256 hash**'i tutulur |
+| Saklama | Saklanmaz, imza ile doğrulanır; iptal edilen oturumlar Redis'te kısa süreli bir listede | DB'de sadece **SHA-256 hash**'i tutulur |
 | Doğrulayan | Her servis, JWKS'ten aldığı public key ile | Sadece iam-service |
 
 - **Neden RS256 ve JWKS:** Simetrik bir imzada (HS256) token'ı doğrulayan her servis aynı zamanda token üretebilirdi. Asimetrik imzada private key yalnızca iam-service'te durur; diğer servisler sadece doğrulayabilir. `kid` header'ı sayesinde key rotasyonu yapılabilir: bilinmeyen bir `kid` görüldüğünde JWKS yeniden çekilir. Bu yeniden çekme rate limitlidir, böylece rastgele `kid`'li token'larla iam-service'e yük bindirilemez. iam-service erişilemezse sse-service bunu "geçersiz token" değil `503 auth_unavailable` olarak bildirir.
 - **Refresh token rotasyonu ve tekrar kullanım tespiti:** Her refresh işleminde eski token tek bir koşullu `UPDATE` ile iptal edilir; böylece aynı token'la eşzamanlı yapılan iki refresh'ten yalnızca biri başarılı olur. Daha önce kullanılmış bir token tekrar gelirse, token'ın çalındığı varsayılır ve o oturumdaki **tüm** token'lar iptal edilir.
+- **Access token iptali:** Access token'lar saklanmadığı için normalde süreleri dolana kadar (15 dk) geçerlidir. Bu açığı kapatmak için her token, ait olduğu oturumun kimliğini (`sid`, refresh token ailesinin kimliği) taşır.
+  - **Ne zaman iptal edilir:** Logout'ta ve çalınmış refresh token tespit edildiğinde iam-service oturumu Redis'teki `auth:revoked-session:<sid>` listesine yazar.
+  - **Kim kontrol eder:** Gateway, sse-service ve iam-service token doğrularken bu listeye bakar; o oturumun bütün access token'ları anında reddedilir (`401 invalid_token`). Dashboard bu durumda refresh dener, refresh de iptal edildiği için oturum kapanır.
+  - **Neden tek tek token değil oturum:** Dashboard logout'ta sadece refresh token gönderiyor. Refresh token'dan oturum bulunuyor ve tek bir kayıtla o oturumdaki bütün access token'lar (refresh ile yenilenmiş olanlar dahil) geçersiz oluyor. Çalınmış refresh token senaryosunda saldırganın elindeki access token da böylece iptal edilir.
+  - **Liste küçük kalır:** Kayıt, access token ömrü + 1 dakika (doğrulayıcıların saat toleransı) sonra kendiliğinden silinir; o noktada oturumun bütün token'larının süresi zaten dolmuştur.
+  - **Redis erişilemezse:** Kontrol "fail-open" çalışır, yani token kabul edilir ve durum loglanır. Aksi halde bir Redis kesintisi bütün sistemi kilitlerdi; risk access token ömrüyle sınırlı kalır. Redis yoksa (`REDIS_URL` boş) iptal devre dışıdır ve refresh token'lar yine DB'de iptal edilir.
+  - **Maliyet:** Kimliği doğrulanmış her istek gateway'de ve sse-service'te birer Redis `EXISTS` çağrısı yapar.
 - **Şifreler:** bcrypt ile saklanır (cost 12, `BCRYPT_COST`). Şifre uzunluğu 8–72 byte arasında olmalı; bcrypt 72 byte'tan sonrasını yok saydığı için üst sınır bu. Var olmayan bir kullanıcı adıyla login denendiğinde de sahte bir hash ile karşılaştırma yapılır. Böylece yanıt süresinden hangi kullanıcı adlarının kayıtlı olduğu anlaşılamaz.
 - **Kullanıcı adları:** Küçük harfe çevrilerek saklanır ve büyük/küçük harf duyarsız olarak tekildir.
 
@@ -541,6 +548,7 @@ Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metrikler
 | `JWT_ISSUER` / `JWT_AUDIENCE` | `iam-service` / `sse` | |
 | `ACCESS_TOKEN_TTL` / `REFRESH_TOKEN_TTL` | `15m` / `168h` | |
 | `BCRYPT_COST` | `12` | |
+| `REDIS_URL` | boş | İptal edilen oturumların listesi; gateway ve sse-service aynı listeyi okur. Boşsa logout sonrası access token'lar süreleri dolana kadar geçerli kalır |
 
 **sse-service**
 

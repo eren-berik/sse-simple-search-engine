@@ -31,8 +31,8 @@ func NewSigner(cfg SignerConfig) *Signer {
 	return &Signer{cfg: cfg, kid: KeyID(&cfg.Key.PublicKey)}
 }
 
-// Sign issues an access token for the user and returns it with its expiry.
-func (s *Signer) Sign(subject, username string, role Role) (string, time.Time, error) {
+// Sign issues an access token for the user's session and returns it with its expiry.
+func (s *Signer) Sign(subject, username string, role Role, sessionID string) (string, time.Time, error) {
 	now := s.cfg.Now()
 	exp := now.Add(s.cfg.TTL)
 	jti := make([]byte, 16)
@@ -41,8 +41,9 @@ func (s *Signer) Sign(subject, username string, role Role) (string, time.Time, e
 	}
 
 	claims := Claims{
-		Username: username,
-		Role:     role,
+		Username:  username,
+		Role:      role,
+		SessionID: sessionID,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    s.cfg.Issuer,
 			Subject:   subject,

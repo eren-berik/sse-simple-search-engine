@@ -100,7 +100,7 @@ func (m *MemoryStore) RevokeFamily(_ context.Context, familyID string, now time.
 	return nil
 }
 
-func (m *MemoryStore) RevokeFamilyByTokenHash(ctx context.Context, hash []byte, now time.Time) error {
+func (m *MemoryStore) RevokeFamilyByTokenHash(ctx context.Context, hash []byte, now time.Time) (string, error) {
 	m.mu.Lock()
 	family := ""
 	for _, t := range m.tokens {
@@ -110,9 +110,9 @@ func (m *MemoryStore) RevokeFamilyByTokenHash(ctx context.Context, hash []byte, 
 	}
 	m.mu.Unlock()
 	if family == "" {
-		return nil
+		return "", nil
 	}
-	return m.RevokeFamily(ctx, family, now)
+	return family, m.RevokeFamily(ctx, family, now)
 }
 
 // ActiveTokens counts unrevoked tokens, for assertions.

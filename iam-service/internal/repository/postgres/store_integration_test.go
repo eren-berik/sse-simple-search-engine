@@ -108,7 +108,15 @@ func TestRefreshTokenLifecycle(t *testing.T) {
 	_, err = s.ConsumeRefreshToken(ctx, []byte("unknown"), now)
 	assert.ErrorIs(t, err, domain.ErrInvalidRefreshToken)
 
-	require.NoError(t, s.RevokeFamilyByTokenHash(ctx, first, now))
+	revokedFamily, err := s.RevokeFamilyByTokenHash(ctx, first, now)
+	require.NoError(t, err)
+	assert.Equal(t, family, revokedFamily)
+	again, err := s.RevokeFamilyByTokenHash(ctx, first, now)
+	require.NoError(t, err)
+	assert.Equal(t, family, again, "a repeated logout still names the session")
+	unknown, err := s.RevokeFamilyByTokenHash(ctx, []byte("unknown"), now)
+	require.NoError(t, err)
+	assert.Empty(t, unknown)
 	_, err = s.ConsumeRefreshToken(ctx, second, now)
 	assert.ErrorIs(t, err, domain.ErrRefreshTokenReused, "whole family is revoked")
 }
