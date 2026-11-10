@@ -31,7 +31,7 @@ func TestBuildFetchesWithFormatAdapter(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	r := New(httpclient.Config{Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := New(httpclient.Config{Timeout: time.Second}, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	for _, tc := range []struct {
 		cfg  domain.Provider
@@ -44,8 +44,9 @@ func TestBuildFetchesWithFormatAdapter(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, tc.cfg.Name, p.Name())
 
-		contents, err := p.Fetch(context.Background())
+		feed, err := p.Fetch(context.Background())
 		require.NoError(t, err)
+		contents := feed.Contents
 		require.NotEmpty(t, contents)
 		assert.Equal(t, tc.want, contents[0].Title)
 		assert.Equal(t, tc.cfg.Name, contents[0].Provider, "content is attributed to the configured name")
@@ -53,7 +54,7 @@ func TestBuildFetchesWithFormatAdapter(t *testing.T) {
 }
 
 func TestBuildUnknownFormat(t *testing.T) {
-	r := New(httpclient.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := New(httpclient.Config{}, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	_, err := r.Build(domain.Provider{Name: "x", Format: "csv"})
 
@@ -61,7 +62,7 @@ func TestBuildUnknownFormat(t *testing.T) {
 }
 
 func TestClientIsReusedPerProviderUntilURLChanges(t *testing.T) {
-	r := New(httpclient.Config{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := New(httpclient.Config{}, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	cfg := domain.Provider{ID: 1, Name: "p", URL: "http://a", Format: domain.ProviderFormatJSON}
 
 	first := r.client(cfg)
@@ -95,7 +96,7 @@ func TestDetect(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	r := New(httpclient.Config{Timeout: time.Second}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := New(httpclient.Config{Timeout: time.Second}, 0, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ctx := context.Background()
 
 	for path, want := range map[string]domain.ProviderFormat{
@@ -120,7 +121,7 @@ func TestDetect(t *testing.T) {
 func TestBreakerPerProviderAndURL(t *testing.T) {
 	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
 	t.Cleanup(down.Close)
-	r := New(httpclient.Config{Timeout: time.Second, BreakerFailureThreshold: 1, BreakerOpenTimeout: time.Minute},
+	r := New(httpclient.Config{Timeout: time.Second, BreakerFailureThreshold: 1, BreakerOpenTimeout: time.Minute}, 0,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	fetch := func(cfg domain.Provider) error {
 		p, err := r.Build(cfg)

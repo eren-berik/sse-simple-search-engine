@@ -6,15 +6,14 @@ package provider
 
 import (
 	"context"
-
-	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
 )
 
 // Provider fetches content from an external source and returns it in the standard format.
 // Implementations must not set scores; scoring is applied by the ingest service.
 type Provider interface {
 	Name() string
-	Fetch(ctx context.Context) ([]domain.Content, error)
+	// Fetch returns the provider's feed, following its pagination (see FetchPages).
+	Fetch(ctx context.Context) (Feed, error)
 }
 
 // Getter fetches a URL. *httpclient.Client satisfies it; tests can substitute a fake.

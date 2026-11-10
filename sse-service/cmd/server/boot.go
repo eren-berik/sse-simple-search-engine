@@ -156,7 +156,7 @@ func newProviderRegistry(cfg config.Config, log *slog.Logger) *registry.Registry
 
 		BreakerFailureThreshold: cfg.ProviderBreakerFailureThreshold,
 		BreakerOpenTimeout:      cfg.ProviderBreakerOpenTimeout,
-	}, log)
+	}, cfg.ProviderMaxPages, log)
 }
 
 // newVerifier checks access tokens against the identity service's keys and, when Redis is

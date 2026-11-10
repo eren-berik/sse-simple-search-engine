@@ -148,7 +148,9 @@ func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.
 	p, err := s.builder.Build(cfg)
 	var contents []domain.Content
 	if err == nil {
-		contents, err = p.Fetch(ctx)
+		var feed provider.Feed
+		feed, err = p.Fetch(ctx)
+		contents = feed.Contents
 	}
 	if err == nil {
 		run.Fetched = len(contents)
