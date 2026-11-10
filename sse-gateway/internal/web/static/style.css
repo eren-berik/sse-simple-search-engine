@@ -452,8 +452,11 @@ td:first-child { font-weight: 600; }
 .provider-form { margin-top: 20px; }
 .provider-form h3 { margin: 0 0 4px; font-size: 16px; }
 .provider-form p { margin: 0 0 14px; }
-.form-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin-bottom: 14px; }
-.checkbox { display: flex; align-items: center; gap: 6px; padding-bottom: 10px; font-size: 14px; color: var(--muted); }
+/* Top-aligned, so a hint under one field does not push the others' inputs out of line. */
+.form-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.checkbox { display: flex; align-items: center; gap: 6px; height: 40px; margin-top: 22px; font-size: 14px; color: var(--muted); }
+.name-field { flex: 0 0 240px; }
+.hint-text { font-size: 11.5px; font-weight: 400; line-height: 1.4; color: var(--muted); }
 .actions { display: flex; gap: 4px; justify-content: flex-end; flex-wrap: nowrap; }
 button.icon-btn { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; }
 button.icon-btn:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
