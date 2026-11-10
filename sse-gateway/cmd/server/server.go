@@ -10,6 +10,8 @@ const shutdownTimeout = 10 * time.Second
 
 // serve runs the HTTP server until ctx is cancelled or the server fails, then shuts down gracefully.
 func (a *application) serve(ctx context.Context) error {
+	go a.metrics.Run(ctx)
+
 	serverErr := make(chan error, 1)
 	go func() {
 		a.log.Info("http server listening", "addr", a.cfg.HTTPAddr)

@@ -16,18 +16,23 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/jwtauth"
+	"github.com/eren-berik/sse-simple-search-engine/sse-gateway/pkg/metrics"
 )
 
 // application holds the wired components and the resources that must be released on shutdown.
 type application struct {
-	cfg   config.Config
-	log   *slog.Logger
-	redis *redis.Client // nil when REDIS_URL is not set
-	http  *fiber.App
+	cfg     config.Config
+	log     *slog.Logger
+	redis   *redis.Client // nil when REDIS_URL is not set
+	http    *fiber.App
+	metrics *metrics.Server
 }
 
 func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*application, error) {
 	app := &application{cfg: cfg, log: log}
+	reg := metrics.NewRegistry()
+	app.metrics = metrics.NewServer(cfg.MetricsAddr, reg, log)
+	edgeMetrics := middleware.NewMetrics(reg)
 
 	if cfg.RedisURL != "" {
 		opts, err := redis.ParseURL(cfg.RedisURL)
@@ -57,8 +62,8 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		BaseBackoff:      cfg.UpstreamBaseBackoff,
 		MaxBackoff:       cfg.UpstreamMaxBackoff,
 	}
-	iamGuard := middleware.NewResilience("iam-service", resilience, log)
-	sseGuard := middleware.NewResilience("sse-service", resilience, log)
+	iamGuard := middleware.NewResilience("iam-service", resilience, log, edgeMetrics)
+	sseGuard := middleware.NewResilience("sse-service", resilience, log, edgeMetrics)
 
 	// An open circuit is reported but does not fail readiness: the liveness checks above decide.
 	optional := map[string]httpx.Check{
@@ -80,13 +85,15 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 		Log:             log,
 		Verifier:        jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
 		RateLimits: middleware.RateLimits{
-			IP:    middleware.Limit{Max: cfg.IPRateLimitMax, Window: cfg.IPRateLimitWindow},
-			Auth:  middleware.Limit{Max: cfg.AuthRateLimitMax, Window: cfg.AuthRateLimitWindow},
-			User:  middleware.Limit{Max: cfg.UserRateLimitMax, Window: cfg.UserRateLimitWindow},
-			Sync:  middleware.Limit{Max: cfg.SyncRateLimitMax, Window: cfg.SyncRateLimitWindow},
-			Redis: app.redis,
-			Log:   log,
+			IP:      middleware.Limit{Max: cfg.IPRateLimitMax, Window: cfg.IPRateLimitWindow},
+			Auth:    middleware.Limit{Max: cfg.AuthRateLimitMax, Window: cfg.AuthRateLimitWindow},
+			User:    middleware.Limit{Max: cfg.UserRateLimitMax, Window: cfg.UserRateLimitWindow},
+			Sync:    middleware.Limit{Max: cfg.SyncRateLimitMax, Window: cfg.SyncRateLimitWindow},
+			Redis:   app.redis,
+			Log:     log,
+			Metrics: edgeMetrics,
 		},
+		Instrument: metrics.HTTP(reg),
 	})
 	return app, nil
 }

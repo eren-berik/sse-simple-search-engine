@@ -19,6 +19,9 @@ type AppConfig struct {
 	// TrustProxyHeaders makes c.IP() read X-Forwarded-For. Enable it only for services that are
 	// reachable exclusively through the gateway, otherwise clients could spoof their address.
 	TrustProxyHeaders bool
+	// Instrument, if set, wraps every request outside the request logger, so it sees the final
+	// status even when a handler returned an error (e.g. metrics.HTTP).
+	Instrument fiber.Handler
 }
 
 // NewApp returns a Fiber app with the shared configuration and base middleware:
@@ -41,6 +44,9 @@ func NewApp(cfg AppConfig) *fiber.App {
 
 	app := fiber.New(fc)
 	app.Use(requestid.New(requestid.Config{Header: HeaderRequestID}))
+	if cfg.Instrument != nil {
+		app.Use(cfg.Instrument)
+	}
 	app.Use(RequestLogger(cfg.Log))
 	app.Use(recover.New())
 	return app

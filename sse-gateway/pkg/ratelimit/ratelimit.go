@@ -24,6 +24,8 @@ type Config struct {
 	Window time.Duration
 	// Key identifies whose requests are counted together; it defaults to the client IP.
 	Key func(c *fiber.Ctx) string
+	// OnLimit, if set, is called for every rejected request.
+	OnLimit func()
 	// Redis is optional; when set, counters are shared across gateway instances.
 	Redis *redis.Client
 	Log   *slog.Logger
@@ -37,6 +39,9 @@ func New(rc Config) fiber.Handler {
 		Expiration:   rc.Window,
 		KeyGenerator: rc.Key,
 		LimitReached: func(c *fiber.Ctx) error {
+			if rc.OnLimit != nil {
+				rc.OnLimit()
+			}
 			// The limiter only sets Retry-After on rejection; report the exhausted limit too.
 			c.Set(headerLimit, strconv.Itoa(rc.Max))
 			c.Set(headerRemaining, "0")

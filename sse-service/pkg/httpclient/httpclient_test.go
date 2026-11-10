@@ -110,3 +110,73 @@ func TestClientStopsOnContextCancel(t *testing.T) {
 
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func breakerClient(threshold uint32, open time.Duration, retries int, states *[]BreakerState) *Client {
+	return New(Config{
+		Timeout: time.Second, MaxRetries: retries, BaseBackoff: time.Millisecond, MaxBackoff: time.Millisecond,
+		BreakerFailureThreshold: threshold, BreakerOpenTimeout: open, Name: "feed",
+		OnStateChange: func(name string, _, to BreakerState) {
+			if name == "feed" {
+				*states = append(*states, to)
+			}
+		},
+	})
+}
+
+func TestBreakerOpensAndRecovers(t *testing.T) {
+	srv, calls := sequenceServer(t, 500, 500, 500) // then 200
+	var states []BreakerState
+	c := breakerClient(3, 50*time.Millisecond, 0, &states)
+
+	for range 3 {
+		_, err := c.Get(context.Background(), srv.URL)
+		require.Error(t, err)
+	}
+	assert.Equal(t, BreakerOpen, c.State())
+
+	_, err := c.Get(context.Background(), srv.URL)
+	assert.ErrorIs(t, err, ErrCircuitOpen)
+	assert.Equal(t, int32(3), calls.Load(), "an open circuit does not call the remote")
+
+	time.Sleep(60 * time.Millisecond)
+	body, err := c.Get(context.Background(), srv.URL)
+	require.NoError(t, err, "a trial call closes the circuit")
+	assert.Equal(t, "ok", string(body))
+	assert.Equal(t, BreakerClosed, c.State())
+	assert.Equal(t, []BreakerState{BreakerOpen, BreakerHalfOpen, BreakerClosed}, states)
+}
+
+func TestBreakerCountsEveryAttemptAndStopsRetries(t *testing.T) {
+	srv, calls := sequenceServer(t, 503, 503, 503, 503, 503, 503)
+	var states []BreakerState
+	c := breakerClient(2, time.Minute, 5, &states)
+
+	_, err := c.Get(context.Background(), srv.URL)
+
+	assert.ErrorIs(t, err, ErrCircuitOpen)
+	assert.Equal(t, int32(2), calls.Load(), "retries stop once the circuit opens")
+}
+
+func TestBreakerIgnoresCancellation(t *testing.T) {
+	srv, _ := sequenceServer(t)
+	var states []BreakerState
+	c := breakerClient(1, time.Minute, 0, &states)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := c.Get(ctx, srv.URL)
+
+	require.Error(t, err)
+	assert.Equal(t, BreakerClosed, c.State(), "a cancelled sync says nothing about the remote")
+}
+
+func TestBreakerDisabledByDefault(t *testing.T) {
+	srv, calls := sequenceServer(t, 500, 500, 500, 500, 500, 500, 500, 500, 500, 500)
+	c := testClient(0)
+
+	for range 10 {
+		_, err := c.Get(context.Background(), srv.URL)
+		assert.NotErrorIs(t, err, ErrCircuitOpen)
+	}
+	assert.Equal(t, int32(10), calls.Load())
+}

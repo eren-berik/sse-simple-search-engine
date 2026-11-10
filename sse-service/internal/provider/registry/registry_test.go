@@ -116,3 +116,31 @@ func TestDetect(t *testing.T) {
 	_, err = r.Detect(ctx, srv.URL+"/missing")
 	assert.ErrorIs(t, err, domain.ErrProviderUnreachable)
 }
+
+func TestBreakerPerProviderAndURL(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }))
+	t.Cleanup(down.Close)
+	r := New(httpclient.Config{Timeout: time.Second, BreakerFailureThreshold: 1, BreakerOpenTimeout: time.Minute},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	fetch := func(cfg domain.Provider) error {
+		p, err := r.Build(cfg)
+		require.NoError(t, err)
+		_, err = p.Fetch(context.Background())
+		return err
+	}
+	broken := domain.Provider{ID: 1, Name: "broken", URL: down.URL, Format: domain.ProviderFormatJSON}
+	other := domain.Provider{ID: 2, Name: "other", URL: down.URL + "/other", Format: domain.ProviderFormatJSON}
+
+	require.Error(t, fetch(broken))
+	assert.ErrorIs(t, fetch(broken), httpclient.ErrCircuitOpen, "the breaker survives across builds")
+	assert.Equal(t, map[string]httpclient.BreakerState{"broken": httpclient.BreakerOpen}, r.BreakerStates())
+
+	assert.NotErrorIs(t, fetch(other), httpclient.ErrCircuitOpen, "each provider has its own breaker")
+
+	fixed := broken
+	fixed.URL = down.URL + "/fixed"
+	assert.NotErrorIs(t, fetch(fixed), httpclient.ErrCircuitOpen, "a new URL starts with a closed circuit")
+
+	_, err := r.Detect(context.Background(), down.URL)
+	assert.NotErrorIs(t, err, httpclient.ErrCircuitOpen, "detection never uses a breaker")
+}

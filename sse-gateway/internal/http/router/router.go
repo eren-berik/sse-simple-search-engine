@@ -21,6 +21,8 @@ type Deps struct {
 	IAMURL          string
 	SSEURL          string
 	UpstreamTimeout time.Duration
+	// Instrument records request metrics; optional.
+	Instrument fiber.Handler
 	// IAMGuard and SSEGuard protect the calls to each service (circuit breaker, retries); optional.
 	IAMGuard proxy.Guard
 	SSEGuard proxy.Guard
@@ -38,6 +40,7 @@ type Deps struct {
 func New(d Deps) *fiber.App {
 	app := httpx.NewApp(httpx.AppConfig{
 		Name: "sse-gateway", Log: d.Log, ErrorMappers: []httpx.ErrorMapper{middleware.ErrorMapper},
+		Instrument: d.Instrument,
 	})
 	iam := proxy.Target{URL: d.IAMURL, Timeout: d.UpstreamTimeout, Guard: d.IAMGuard}
 	sse := proxy.Target{URL: d.SSEURL, Timeout: d.UpstreamTimeout, Guard: d.SSEGuard}

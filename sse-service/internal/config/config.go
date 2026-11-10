@@ -12,6 +12,8 @@ import (
 type Config struct {
 	HTTPAddr string     `env:"HTTP_ADDR" envDefault:":8080"`
 	LogLevel slog.Level `env:"LOG_LEVEL" envDefault:"info"`
+	// MetricsAddr serves Prometheus metrics on a separate, unpublished port.
+	MetricsAddr string `env:"METRICS_ADDR" envDefault:":9100"`
 
 	DatabaseURL string `env:"DATABASE_URL,required"`
 	// RedisURL is optional; without it an in-process cache is used.
@@ -22,6 +24,10 @@ type Config struct {
 	ProviderRatePerSec float64       `env:"PROVIDER_RATE_PER_SEC" envDefault:"2"`
 	ProviderBurst      int           `env:"PROVIDER_BURST" envDefault:"1"`
 	ProviderMaxRetries int           `env:"PROVIDER_MAX_RETRIES" envDefault:"3"`
+	// A provider's circuit opens after this many consecutive failed requests and stays open
+	// for the timeout; longer than SYNC_INTERVAL so at least one scheduled sync skips it.
+	ProviderBreakerFailureThreshold uint32        `env:"PROVIDER_BREAKER_FAILURE_THRESHOLD" envDefault:"5"`
+	ProviderBreakerOpenTimeout      time.Duration `env:"PROVIDER_BREAKER_OPEN_TIMEOUT" envDefault:"15m"`
 
 	// JWKSURL is the identity service's public key set used to verify access tokens.
 	JWKSURL     string `env:"JWKS_URL,required"`

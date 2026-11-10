@@ -232,3 +232,17 @@ func TestSyncRuns(t *testing.T) {
 	assert.Empty(t, runs[0].Error)
 	assert.Equal(t, "provider2", runs[1].Provider)
 }
+
+func TestCountContents(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	counts, err := repo.CountContents(context.Background())
+
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []domain.ContentCount{
+		{Provider: "provider1", Type: domain.ContentTypeVideo, Count: 4},
+		{Provider: "provider2", Type: domain.ContentTypeVideo, Count: 3},
+		{Provider: "provider2", Type: domain.ContentTypeText, Count: 1},
+	}, counts)
+}

@@ -35,13 +35,13 @@ type Registry struct {
 	log       *slog.Logger
 
 	mu sync.Mutex
-	// clients are kept per provider so rate limits persist across syncs.
+	// clients are kept per provider so rate limits and circuit breakers persist across syncs.
 	clients map[int64]cachedClient
 }
 
 type cachedClient struct {
-	url    string
-	client *httpclient.Client
+	name, url string
+	client    *httpclient.Client
 }
 
 // New returns a registry with the JSON and XML adapters registered.
@@ -79,7 +79,8 @@ func (r *Registry) Build(cfg domain.Provider) (provider.Provider, error) {
 // first, but a format is only accepted if its parser actually understands the content.
 func (r *Registry) Detect(ctx context.Context, url string) (domain.ProviderFormat, error) {
 	cfg := r.clientCfg
-	cfg.MaxRetries = 0 // an admin is waiting for the answer
+	cfg.MaxRetries = 0              // an admin is waiting for the answer
+	cfg.BreakerFailureThreshold = 0 // a one-off check, not a provider's call history
 	body, err := httpclient.New(cfg).Get(ctx, url)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnreachable, err)
@@ -116,13 +117,31 @@ func (r *Registry) candidates(body []byte) []domain.ProviderFormat {
 	return formats
 }
 
+// BreakerStates returns the circuit breaker state of every provider that has been called.
+func (r *Registry) BreakerStates() map[string]httpclient.BreakerState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	states := make(map[string]httpclient.BreakerState, len(r.clients))
+	for _, c := range r.clients {
+		states[c.name] = c.client.State()
+	}
+	return states
+}
+
+// client returns the provider's HTTP client. A new URL starts with a fresh client, so a breaker
+// opened by a broken URL does not block the corrected one.
 func (r *Registry) client(cfg domain.Provider) *httpclient.Client {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if c, ok := r.clients[cfg.ID]; ok && c.url == cfg.URL {
+	if c, ok := r.clients[cfg.ID]; ok && c.url == cfg.URL && c.name == cfg.Name {
 		return c.client
 	}
-	c := httpclient.New(r.clientCfg)
-	r.clients[cfg.ID] = cachedClient{url: cfg.URL, client: c}
+	clientCfg := r.clientCfg
+	clientCfg.Name = cfg.Name
+	clientCfg.OnStateChange = func(name string, from, to httpclient.BreakerState) {
+		r.log.Warn("provider circuit breaker state changed", "provider", name, "from", from.String(), "to", to.String())
+	}
+	c := httpclient.New(clientCfg)
+	r.clients[cfg.ID] = cachedClient{name: cfg.Name, url: cfg.URL, client: c}
 	return c
 }

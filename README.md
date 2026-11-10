@@ -31,8 +31,10 @@ make up          # ya da: docker compose up --build -d
 | http://localhost:8080/docs | Swagger UI (OpenAPI 3) |
 | http://localhost:8080/api/v1/... | API (gateway üzerinden) |
 | http://localhost:8080/readyz | Gateway ve arkasındaki servislerin hazırlık durumu |
+| http://localhost:3000 | Grafana: hazır dashboard'lar (giriş gerektirmez; düzenlemek için `admin` / `admin`) |
+| http://localhost:9090 | Prometheus |
 
-Dışarıya yalnızca gateway açılır. iam-service ve sse-service sadece compose ağı içinden erişilebilir.
+Dışarıya API olarak yalnızca gateway açılır. iam-service ve sse-service sadece compose ağı içinden erişilebilir; metrik portları (`:9100`) da dışarı açılmaz, onları yalnızca Prometheus okur.
 
 ```bash
 # Admin olarak kayıt ol ve token al
@@ -102,15 +104,16 @@ WingieCase/
 │   │   ├── http/router/
 │   │   └── web/static/          dashboard (HTML + vanilla JS, binary'ye gömülü)
 │   ├── openapi/                 tüm sistemin OpenAPI spec'i
-│   └── pkg/                     httpx, ratelimit, jwtauth (sadece doğrulama + jwtauthtest)
+│   └── pkg/                     httpx, metrics, ratelimit, jwtauth (sadece doğrulama + jwtauthtest)
 ├── iam-service/
 │   ├── cmd/server/
 │   ├── internal/
 │   │   ├── config/  domain/
 │   │   ├── auth/                register/login/refresh/logout, bcrypt, token rotasyonu (+ authtest: in-memory store)
 │   │   ├── repository/postgres/ users, refresh_tokens + migration'lar
+│   │   ├── telemetry/           auth olay metrikleri (auth use case'ini saran decorator)
 │   │   └── http/{handler,router}/
-│   └── pkg/                     httpx, jwtauth (signer + verifier + JWKS + middleware)
+│   └── pkg/                     httpx, metrics, jwtauth (signer + verifier + JWKS + middleware)
 ├── sse-service/
 │   ├── cmd/server/
 │   ├── internal/
@@ -119,10 +122,11 @@ WingieCase/
 │   │   ├── ingest/              senkronizasyon
 │   │   ├── repository/postgres/ contents, providers, sync_runs + migration'lar
 │   │   ├── service/{search,providers}/
+│   │   ├── telemetry/           arama, sync ve provider durum metrikleri
 │   │   └── http/{handler,router}/
-│   ├── pkg/                     cache, httpclient, httpx, jwtauth (sadece doğrulama + jwtauthtest)
+│   ├── pkg/                     cache, httpclient (rate limit + retry + circuit breaker), httpx, metrics, jwtauth
 │   └── test/testdata/           gerçek provider yanıtlarından fixture'lar
-├── deploy/                      postgres init script'i, (opsiyonel) imzalama anahtarı
+├── deploy/                      postgres init script'i, (opsiyonel) imzalama anahtarı, prometheus ve grafana (dashboard'lar)
 ├── docker-compose.yml · Makefile · go.work · .golangci.yml · .github/workflows/ci.yml
 ```
 
@@ -320,6 +324,14 @@ Geçersiz kayıtlar loglanıp atlanır.
 - Ağ hataları, `429` ve `5xx` yanıtları exponential backoff ile yeniden denenir; `429`'da `Retry-After` header'ına uyulur.
 - Yanıt boyutu 10 MB ile sınırlı.
 
+**Circuit breaker (provider başına):**
+- Sürekli hata veren bir provider'a her sync'te tekrar tekrar istek atmak hem zaman kaybı hem de o provider'a gereksiz yük. Bu yüzden her provider'ın HTTP client'ında bir breaker var.
+- `PROVIDER_BREAKER_FAILURE_THRESHOLD` (5) ardışık başarısız istekten sonra devre açılır. Retry denemeleri de tek tek sayılır; devre açıldığı anda retry'lar da durur.
+- Açık devrede sync o provider'ı ağ isteği yapmadan atlar ve `sync_runs`'a "circuit open" hatasıyla kaydeder; diğer provider'lar etkilenmez.
+- `PROVIDER_BREAKER_OPEN_TIMEOUT` (15 dk) dolunca tek bir deneme isteği yapılır; başarılıysa devre kapanır. Süre `SYNC_INTERVAL`'dan (10 dk) uzun seçildi ki en az bir periyodik sync provider'ı atlasın.
+- Breaker provider ve URL başınadır: admin bozuk URL'yi düzelttiğinde yeni URL kapalı bir devreyle başlar. Format algılama breaker kullanmaz. İptal edilen bir sync hata sayılmaz.
+- Breaker durumu bellekte tutulur; servis yeniden başlarsa devreler kapalı başlar. Tek instance için yeterli.
+
 **Hata izolasyonu:**
 - Provider'lar paralel çekilir; biri başarısız olsa bile diğerlerinin verisi yazılır.
 - Her çalışmanın sonucu `sync_runs` tablosuna kaydedilir.
@@ -387,6 +399,55 @@ Tam şema için [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi
 
 ---
 
+## İzleme (Monitoring)
+
+`docker compose up` ile birlikte Prometheus ve Grafana da ayağa kalkar. Dashboard'lar ve datasource `deploy/grafana` altından otomatik yüklenir; elle kurulum gerekmez.
+
+### Nasıl çalışıyor
+
+- Her servis metriklerini **ayrı bir portta** (`METRICS_ADDR`, varsayılan `:9100`) sunar. Bu port compose dışına açılmaz, böylece `/metrics` public API portundan hiçbir zaman erişilemez.
+- Prometheus üç servisi 10 saniyede bir okur ve veriyi 7 gün saklar.
+- Grafana giriş istemeden dashboard'ları gösterir (anonim viewer). Düzenleme için `admin` hesabı gerekir; şifre `GRAFANA_ADMIN_PASSWORD` ile değiştirilebilir.
+- Dashboard'lar elle yazılmış JSON yerine `deploy/grafana/generate.py` ile üretilir; böylece paneller tutarlı kalır. Bir paneli değiştirdikten sonra `python3 deploy/grafana/generate.py` çalıştırmak yeterli; Grafana dosyaları birkaç saniye içinde yeniden yükler.
+
+### Dashboard'lar
+
+**Content Search · Genel Bakış**
+- Özet kutular: gateway istek hızı, 5xx oranı, p95 gecikme, açık devre sayısı.
+- Servis bazında istek hızı ve p95 gecikme.
+- Gateway yanıt kodları: 401/403 edge'deki yetki kontrolünü, 429 rate limit'i, 502/503/504 upstream sorunlarını gösterir.
+- Kademe bazında rate limit redleri (ip, auth, user, sync).
+- Gateway → servis circuit breaker durumları (Kapalı / Yarı açık / Açık), retry'lar ve açık devre yüzünden hızlıca reddedilen istekler.
+- Kimlik doğrulama olayları: `invalid_credentials` patlaması şifre denemesine, `token_reused` ise çalınmış bir refresh token'a işaret eder.
+
+**Content Search · Arama ve Senkronizasyon**
+- Cache isabet oranı, saklanan içerik, etkin provider ve açık provider devresi sayıları.
+- Cache durumuna göre aramalar (HIT / MISS / BYPASS) ve arama gecikmesi (p50 / p95).
+- Provider bazında sync sonuçları ve sync süresi.
+- Provider circuit breaker durumları.
+- Provider ve türe göre içerik sayısı.
+
+### Metrikler
+
+| Servis | Metrik | Açıklama |
+|---|---|---|
+| hepsi | `http_requests_total{method,route,status}`, `http_request_duration_seconds` | İstek sayısı ve gecikme. Etiket ham path değil route kalıbıdır (`/api/v1/contents/:id`), seri sayısı sınırlı kalır |
+| hepsi | `go_*`, `process_*` | Go runtime ve process metrikleri |
+| gateway | `gateway_rate_limited_total{tier}` | 429 ile reddedilen istekler |
+| gateway | `gateway_circuit_state{upstream}` | 0 kapalı, 1 yarı açık, 2 açık |
+| gateway | `gateway_upstream_retries_total`, `gateway_circuit_rejected_total` | Retry'lar ve açık devre yüzünden hızlı redler |
+| iam | `auth_events_total{event,result}` | register / login / refresh / logout sonuçları |
+| sse | `search_requests_total{cache}` | HIT / MISS / BYPASS |
+| sse | `sync_runs_total{provider,status}`, `sync_duration_seconds`, `sync_items_upserted_total` | Sync çalışmaları (periyodik ve manuel) |
+| sse | `contents_stored{provider,type}`, `provider_enabled`, `provider_circuit_state` | Prometheus okuduğu anda veritabanından ve breaker'lardan hesaplanır |
+
+Notlar:
+- **Kod değişikliği gerektirmeyen tasarım:** Servis metrikleri, gözlenen bileşenleri saran decorator'lar ile toplanır (`telemetry` paketleri). Arama servisi, sync store ve auth use case'inin koduna dokunulmadı.
+- **Sayaçlar sıfırdan başlar:** Bilinen etiket kombinasyonları (rate limit kademeleri, cache durumları, beklenen auth sonuçları) servis açılırken 0 değeriyle oluşturulur. İlk değeri 1 olarak ortaya çıkan bir sayacın artışını `increase()`/`rate()` göremez ve ilk olay grafikte kaybolurdu.
+- **Circuit durumları:** Grafana 11'in state-timeline paneli sayısal durumlarda value mapping'leri yok sayıyor. Bu yüzden durumlar renkli stat kutularıyla gösteriliyor.
+
+---
+
 ## Testler
 
 ```bash
@@ -407,6 +468,10 @@ make test-integration   # + PostgreSQL ve Redis üzerinde integration testler
 | gateway | `http/router` | Her path'in doğru servise gitmesi; path/query/body/Authorization'ın iletilmesi; istemcinin gönderdiği `X-Forwarded-For`'un ezilmesi; request-id'nin taşınması; tanımsız path'lerin iletilmemesi; upstream kapalıyken 502; **edge yetki matrisi** (anonim / viewer / admin, reddedilen isteğin servise hiç ulaşmaması); auth, IP, kullanıcı ve sync limitleri (limitin token'ı değil kullanıcıyı takip etmesi, aynı IP'deki kullanıcıların ayrı kotası); açık devrenin yalnızca kendi servisini etkilemesi |
 | gateway | `http/middleware` | JWT doğrulama ve rol kontrolleri, okuma/yazma ayrımı, JWKS kesintisinde 503; idempotent isteklerin tekrar denenmesi, yazma isteklerinin ve timeout'ların denenmemesi, devrenin açılıp yarı açık denemeyle kapanması, açık devrenin retry'ı durdurması, `500`'ün devreyi açmaması, backoff'un üst sınırı ve jitter'ı |
 | gateway | `pkg/ratelimit` | Pencere başına limit, özel anahtar, iç içe limitlerde en sıkı header'ın raporlanması |
+| sse | `pkg/httpclient` | Provider circuit breaker'ının açılıp deneme isteğiyle kapanması, her retry denemesinin sayılması ve açık devrenin retry'ı durdurması, iptalin hata sayılmaması, varsayılan olarak kapalı olması |
+| sse | `registry` | Breaker'ın provider ve URL başına olması, sync'ler arasında korunması, URL düzeltilince sıfırlanması, format algılamanın breaker kullanmaması |
+| hepsi | `pkg/metrics`, `telemetry`, `middleware` | Route kalıbıyla etiketleme, cache durumu / sync / auth sonucu sayaçları, scrape anında okunan durumlar ve DB hatasında scrape'in bozulmaması, rate limit / retry / devre metrikleri, sayaçların sıfırdan başlaması |
+| sse | `repository` *(integration)* | Provider ve türe göre içerik sayımı |
 
 Integration testleri her çalıştırmada geçici bir veritabanı oluşturup sonunda siler. CI (GitHub Actions) her modül için vet, golangci-lint ve tüm testleri Postgres/Redis servisleriyle çalıştırır.
 
@@ -415,6 +480,8 @@ Integration testleri her çalıştırmada geçici bir veritabanı oluşturup son
 ## Konfigürasyon
 
 Her servis environment variable ile yapılandırılır. Compose'un okuduğu değişkenler için [`.env.example`](.env.example) dosyasına bakın.
+
+Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metriklerini sunduğu ayrı adresi alır. Compose tarafında `PROMETHEUS_PORT` (9090), `GRAFANA_PORT` (3000) ve `GRAFANA_ADMIN_PASSWORD` (`admin`) ayarlanabilir.
 
 **sse-gateway**
 
@@ -456,6 +523,8 @@ Her servis environment variable ile yapılandırılır. Compose'un okuduğu değ
 | `SYNC_INTERVAL` | `10m` | Periyodik senkronizasyon aralığı |
 | `PROVIDER_RATE_PER_SEC` / `PROVIDER_BURST` | `2` / `1` | Provider başına istek limiti |
 | `PROVIDER_MAX_RETRIES` / `PROVIDER_TIMEOUT` | `3` / `5s` | |
+| `PROVIDER_BREAKER_FAILURE_THRESHOLD` | `5` | Provider devresini açan ardışık başarısız istek sayısı (`0` kapatır) |
+| `PROVIDER_BREAKER_OPEN_TIMEOUT` | `15m` | Provider devresinin açık kalma süresi |
 | `SCORE_VIDEO_COEFFICIENT` / `SCORE_TEXT_COEFFICIENT` | `1.5` / `1.0` | |
 
 ---
@@ -470,4 +539,4 @@ Her servis environment variable ile yapılandırılır. Compose'un okuduğu değ
   - Birden fazla sse-service instance'ında periyodik sync'in tek kopyada çalışması için Postgres advisory lock kullanılabilir.
   - Offset pagination yerine keyset pagination kullanılabilir.
   - Arama yükü büyürse Elasticsearch/OpenSearch read model olarak eklenebilir.
-- **Gözlemlenebilirlik:** Prometheus metrikleri ve OpenTelemetry tracing eklenebilir. Request-id altyapısı tracing'e geçiş için hazır.
+- **Gözlemlenebilirlik:** OpenTelemetry tracing eklenebilir; request-id altyapısı hazır. Prometheus'a alert kuralları (örneğin açık devre, 5xx oranı, `token_reused`) ve Alertmanager eklenebilir.

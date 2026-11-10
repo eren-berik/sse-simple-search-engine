@@ -19,20 +19,23 @@ import (
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/scoring"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/providers"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/service/search"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/telemetry"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/cache"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpclient"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/httpx"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/jwtauth"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/pkg/metrics"
 )
 
 // application holds the wired components and the resources that must be released on shutdown.
 type application struct {
-	cfg    config.Config
-	log    *slog.Logger
-	pool   *pgxpool.Pool
-	redis  *redis.Client // nil when REDIS_URL is not set
-	http   *fiber.App
-	ingest *ingest.Service
+	cfg     config.Config
+	log     *slog.Logger
+	pool    *pgxpool.Pool
+	redis   *redis.Client // nil when REDIS_URL is not set
+	http    *fiber.App
+	ingest  *ingest.Service
+	metrics *metrics.Server
 }
 
 // boot connects to infrastructure and wires every component together.
@@ -57,11 +60,22 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	scorer := newScorer(cfg)
 	searchSvc := search.NewService(contentRepo, searchCache, cfg.CacheTTL, scorer, log)
 	providerRegistry := newProviderRegistry(cfg, log)
-	app.ingest = ingest.NewService(providerRepo, providerRegistry, contentRepo, scorer, searchSvc, log)
+
+	reg := metrics.NewRegistry()
+	app.metrics = metrics.NewServer(cfg.MetricsAddr, reg, log)
+	domainMetrics := telemetry.New(reg)
+	telemetry.RegisterState(reg, telemetry.StateSource{
+		Providers: providerRepo.List,
+		Contents:  contentRepo.CountContents,
+		Breakers:  providerRegistry.BreakerStates,
+		Log:       log,
+	})
+
+	app.ingest = ingest.NewService(providerRepo, providerRegistry, domainMetrics.InstrumentSyncStore(contentRepo), scorer, searchSvc, log)
 
 	keys := jwtauth.NewRemoteKeySource(cfg.JWKSURL, 5*time.Second)
 	app.http = router.New(router.Deps{
-		Contents:  handler.NewContentHandler(searchSvc),
+		Contents:  handler.NewContentHandler(domainMetrics.InstrumentSearcher(searchSvc)),
 		Sync:      handler.NewSyncHandler(app.ingest),
 		Providers: handler.NewProviderHandler(providers.NewService(providerRepo, providerRegistry, searchSvc, log)),
 		Verifier:  jwtauth.NewVerifier(keys, cfg.JWTIssuer, cfg.JWTAudience),
@@ -71,7 +85,8 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 			map[string]httpx.Check{"database": pool.Ping},
 			map[string]httpx.Check{"cache": searchCache.Ping, "jwks": keys.Ping},
 		),
-		Log: log,
+		Log:        log,
+		Instrument: metrics.HTTP(reg),
 	})
 	return app, nil
 }
@@ -131,12 +146,15 @@ func newScorer(cfg config.Config) *scoring.Scorer {
 }
 
 // newProviderRegistry builds providers from their stored configuration. Each provider gets its
-// own HTTP client so rate limits are enforced per provider.
+// own HTTP client so rate limits and circuit breakers apply per provider.
 func newProviderRegistry(cfg config.Config, log *slog.Logger) *registry.Registry {
 	return registry.New(httpclient.Config{
 		Timeout:       cfg.ProviderTimeout,
 		RatePerSecond: cfg.ProviderRatePerSec,
 		Burst:         cfg.ProviderBurst,
 		MaxRetries:    cfg.ProviderMaxRetries,
+
+		BreakerFailureThreshold: cfg.ProviderBreakerFailureThreshold,
+		BreakerOpenTimeout:      cfg.ProviderBreakerOpenTimeout,
 	}, log)
 }

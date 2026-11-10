@@ -70,7 +70,7 @@ func do(t *testing.T, app *fiber.App, method string) result {
 
 func TestRetriesIdempotentRequests(t *testing.T) {
 	url, hits := flakyUpstream(t, 503, 502, 200)
-	app := guardedApp(NewResilience("svc", testConfig(), discard), url, time.Second)
+	app := guardedApp(NewResilience("svc", testConfig(), discard, nil), url, time.Second)
 
 	assert.Equal(t, http.StatusOK, do(t, app, http.MethodGet).status)
 	assert.Equal(t, int32(3), hits.Load(), "two retries, then success")
@@ -80,7 +80,7 @@ func TestGivesUpAfterMaxRetries(t *testing.T) {
 	url, hits := flakyUpstream(t, 503)
 	cfg := testConfig()
 	cfg.FailureThreshold = 100
-	app := guardedApp(NewResilience("svc", cfg, discard), url, time.Second)
+	app := guardedApp(NewResilience("svc", cfg, discard, nil), url, time.Second)
 
 	assert.Equal(t, http.StatusServiceUnavailable, do(t, app, http.MethodGet).status, "the upstream answer is passed through")
 	assert.Equal(t, int32(3), hits.Load())
@@ -88,7 +88,7 @@ func TestGivesUpAfterMaxRetries(t *testing.T) {
 
 func TestDoesNotRetryWrites(t *testing.T) {
 	url, hits := flakyUpstream(t, 503, 200)
-	app := guardedApp(NewResilience("svc", testConfig(), discard), url, time.Second)
+	app := guardedApp(NewResilience("svc", testConfig(), discard, nil), url, time.Second)
 
 	assert.Equal(t, http.StatusServiceUnavailable, do(t, app, http.MethodPost).status)
 	assert.Equal(t, int32(1), hits.Load(), "the first attempt may have had side effects")
@@ -101,7 +101,7 @@ func TestDoesNotRetryTimeouts(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}))
 	t.Cleanup(slow.Close)
-	app := guardedApp(NewResilience("svc", testConfig(), discard), slow.URL, 50*time.Millisecond)
+	app := guardedApp(NewResilience("svc", testConfig(), discard, nil), slow.URL, 50*time.Millisecond)
 
 	res := do(t, app, http.MethodGet)
 	assert.Equal(t, http.StatusGatewayTimeout, res.status)
@@ -112,7 +112,7 @@ func TestDoesNotRetryTimeouts(t *testing.T) {
 func TestRetriesConnectionErrors(t *testing.T) {
 	cfg := testConfig()
 	cfg.FailureThreshold = 100
-	r := NewResilience("svc", cfg, discard)
+	r := NewResilience("svc", cfg, discard, nil)
 	var calls int
 	r.sleep = func(context.Context, time.Duration) error { calls++; return nil }
 	app := httpx.NewApp(httpx.AppConfig{Log: discard, ErrorMappers: []httpx.ErrorMapper{ErrorMapper}})
@@ -129,7 +129,7 @@ func TestCircuitOpensAndRecovers(t *testing.T) {
 	cfg := testConfig()
 	cfg.MaxRetries = 0
 	cfg.OpenTimeout = 50 * time.Millisecond
-	r := NewResilience("svc", cfg, discard)
+	r := NewResilience("svc", cfg, discard, nil)
 	app := guardedApp(r, url, time.Second)
 
 	for range 3 {
@@ -151,7 +151,7 @@ func TestOpenCircuitStopsRetries(t *testing.T) {
 	cfg := testConfig()
 	cfg.FailureThreshold = 2
 	cfg.MaxRetries = 5
-	app := guardedApp(NewResilience("svc", cfg, discard), url, time.Second)
+	app := guardedApp(NewResilience("svc", cfg, discard, nil), url, time.Second)
 
 	res := do(t, app, http.MethodGet)
 	assert.Equal(t, "upstream_unavailable", res.code)
@@ -162,7 +162,7 @@ func TestApplicationErrorsDoNotOpenTheCircuit(t *testing.T) {
 	url, hits := flakyUpstream(t, 500)
 	cfg := testConfig()
 	cfg.FailureThreshold = 1
-	r := NewResilience("svc", cfg, discard)
+	r := NewResilience("svc", cfg, discard, nil)
 	app := guardedApp(r, url, time.Second)
 
 	for range 3 {
@@ -173,7 +173,7 @@ func TestApplicationErrorsDoNotOpenTheCircuit(t *testing.T) {
 }
 
 func TestBackoffIsCappedWithJitter(t *testing.T) {
-	r := NewResilience("svc", ResilienceConfig{BaseBackoff: 100 * time.Millisecond, MaxBackoff: time.Second}, discard)
+	r := NewResilience("svc", ResilienceConfig{BaseBackoff: 100 * time.Millisecond, MaxBackoff: time.Second}, discard, nil)
 
 	for attempt, ceiling := range []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond, time.Second, time.Second} {
 		for range 50 {
