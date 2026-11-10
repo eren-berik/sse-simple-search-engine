@@ -41,7 +41,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		}, []string{"provider"}),
 		upserted: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "sync_items_upserted_total",
-			Help: "Content items written by sync runs, by provider.",
+			Help: "Content items inserted or changed by sync runs, by provider; unchanged items are not written.",
 		}, []string{"provider"}),
 		removed: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "sync_items_removed_total",

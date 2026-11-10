@@ -16,7 +16,8 @@ type SyncRun struct {
 	FinishedAt time.Time  `json:"finished_at"`
 	Status     SyncStatus `json:"status"`
 	Fetched    int        `json:"fetched"`
-	Upserted   int        `json:"upserted"`
+	// Upserted counts items inserted or changed; items identical to the stored ones are not written.
+	Upserted int `json:"upserted"`
 	// Removed counts stored items the provider no longer returns (only after a complete feed).
 	Removed int    `json:"removed"`
 	Error   string `json:"error,omitempty"`

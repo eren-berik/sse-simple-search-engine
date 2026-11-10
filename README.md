@@ -447,7 +447,11 @@ Tam şema için [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi
 ## Cache Stratejisi
 
 - **Cache-aside:** Key `search:v{version}:{sha256(q|type|provider|sort|page|per_page)}`, TTL 90 sn. Yanıttaki `X-Cache` header'ı `HIT`, `MISS` veya `BYPASS` değerini taşır.
-- **Versiyonlu invalidation:** Her sync sonunda `search:version` sayacı `INCR` edilir. Eski key'ler bir daha okunmaz ve TTL dolunca silinir. Invalidation O(1) ve atomik.
+- **Versiyonlu invalidation:** Cache'i geçersiz kılmak için `search:version` sayacı `INCR` edilir. Eski key'ler bir daha okunmaz ve TTL dolunca silinir. Invalidation O(1) ve atomik.
+- **Sadece bir şey değiştiyse:** Sync, değişmemiş kayıtları yazmaz. Upsert, satır aynıysa güncellemeyi atlar (`IS DISTINCT FROM`); skor yeniden hesaplaması da sadece skoru gerçekten değişen kayıtları yazar. Cache yalnızca bir sync bir kaydı ekleyip değiştirdiyse, kaldırdıysa ya da skorunu değiştirdiyse temizlenir.
+  - Provider verisi aynı kaldıkça cache sync'ler arasında korunur; önceden her 10 dakikada bir sıfırlanıyordu.
+  - Gereksiz yazma ve onun bıraktığı ölü satırlar da oluşmaz.
+  - Sync geçmişindeki `upserted` sayısı artık "eklenen ya da değişen" kayıtları gösterir; dashboard "4 kayıt · değişiklik yok" ya da "4 kayıt · 1 değişiklik" şeklinde yazar.
 - **Stampede koruması:** Aynı key için eşzamanlı cache miss'ler `singleflight` ile tek bir DB sorgusuna indirgenir.
 - **Graceful degradation:**
   - Redis yoksa aramalar doğrudan DB'den karşılanır (`BYPASS`).

@@ -41,6 +41,15 @@ type Invalidator interface {
 	Invalidate(ctx context.Context) error
 }
 
+// changes counts the rows a sync wrote: inserted or changed items, removed items and rescored items.
+func (r Report) changes() int {
+	n := r.Rescored
+	for _, run := range r.Runs {
+		n += run.Upserted + run.Removed
+	}
+	return n
+}
+
 // Report summarizes a sync.
 type Report struct {
 	StartedAt  time.Time        `json:"started_at"`
@@ -134,8 +143,13 @@ func (s *Service) sync(ctx context.Context, configs []domain.Provider) Report {
 	}
 	report.Rescored = rescored
 
-	if err := s.invalidator.Invalidate(ctx); err != nil {
-		s.log.Warn("cache invalidation failed; entries will expire via TTL", "error", err)
+	// Cached searches only go stale when this sync changed what they would return.
+	if changed := report.changes(); changed > 0 {
+		if err := s.invalidator.Invalidate(ctx); err != nil {
+			s.log.Warn("cache invalidation failed; entries will expire via TTL", "error", err)
+		}
+	} else {
+		s.log.Info("sync changed nothing; cached searches are kept")
 	}
 
 	report.FinishedAt = s.now()

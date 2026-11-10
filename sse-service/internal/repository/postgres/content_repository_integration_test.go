@@ -56,7 +56,8 @@ func newTestRepo(t *testing.T) (*ContentRepository, *pgxpool.Pool) {
 }
 
 // seed stores both provider fixtures, scored as of fixedNow.
-func seed(t *testing.T, repo *ContentRepository) {
+// seed stores both fixtures and returns how many rows were inserted or changed.
+func seed(t *testing.T, repo *ContentRepository) int {
 	t.Helper()
 	scorer := scoring.New(scoring.DefaultConfig(), func() time.Time { return fixedNow })
 
@@ -77,7 +78,7 @@ func seed(t *testing.T, repo *ContentRepository) {
 	}
 	n, err := repo.UpsertContents(context.Background(), all)
 	require.NoError(t, err)
-	require.Equal(t, 8, n)
+	return n
 }
 
 var fixedNow = time.Date(2024, 3, 16, 0, 0, 0, 0, time.UTC)
@@ -101,19 +102,20 @@ func search(t *testing.T, repo *ContentRepository, q domain.SearchQuery) domain.
 func TestUpsertIsIdempotentAndKeysByProvider(t *testing.T) {
 	repo, pool := newTestRepo(t)
 	ctx := context.Background()
-	seed(t, repo)
-	seed(t, repo) // second run must update, not duplicate
+	assert.Equal(t, 8, seed(t, repo))
+	assert.Zero(t, seed(t, repo), "identical items are not written again")
 
 	var count int
 	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM contents`).Scan(&count))
 	assert.Equal(t, 8, count, "v1..v3 exist in both providers and must be stored separately")
 
 	// An update changes metrics in place.
-	_, err := repo.UpsertContents(ctx, []domain.Content{{
+	changed, err := repo.UpsertContents(ctx, []domain.Content{{
 		Provider: "provider1", ExternalID: "v1", Title: "Go Programming Tutorial (updated)", Type: domain.ContentTypeVideo,
 		Metrics: domain.Metrics{Views: 1}, PublishedAt: fixedNow, Score: 1, ScoreUpdatedAt: fixedNow,
 	}})
 	require.NoError(t, err)
+	assert.Equal(t, 1, changed)
 	var title string
 	var views int64
 	require.NoError(t, pool.QueryRow(ctx,
@@ -307,8 +309,8 @@ func TestMarkRemovedHidesAndRestores(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, other, "only the given provider is affected")
 
-	// The provider returns it again: the upsert lists it again.
-	seed(t, repo)
+	// The provider returns it again: the upsert lists it again (and counts it as a change).
+	assert.Equal(t, 1, seed(t, repo))
 	assert.Equal(t, []string{"Introduction to Docker"}, docker())
 }
 
@@ -323,4 +325,48 @@ func TestSyncRunRecordsRemovals(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
 	assert.Equal(t, 1, runs[0].Removed)
+}
+
+func TestUnchangedItemsAreNotRewritten(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	ctx := context.Background()
+	require.Equal(t, 8, seed(t, repo))
+	updatedAt := func() time.Time {
+		var ts time.Time
+		require.NoError(t, pool.QueryRow(ctx,
+			`SELECT updated_at FROM contents WHERE provider = 'provider2' AND external_id = 'v1'`).Scan(&ts))
+		return ts
+	}
+	before := updatedAt()
+
+	assert.Zero(t, seed(t, repo))
+	assert.Equal(t, before, updatedAt(), "the row was not touched")
+}
+
+func TestRecalculateScoresWritesOnlyChangedScores(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	ctx := context.Background()
+	require.Equal(t, 8, seed(t, repo))
+	later := fixedNow.Add(time.Hour)
+
+	// Nothing about the scores changes: nothing is written.
+	n, err := repo.RecalculateScores(ctx, later, func(c domain.Content) float64 { return c.Score })
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	var original float64
+	require.NoError(t, pool.QueryRow(ctx, `SELECT score FROM contents WHERE provider = 'provider1' AND external_id = 'v1'`).Scan(&original))
+
+	// One item's score changes (e.g. it left the "within a week" tier).
+	n, err = repo.RecalculateScores(ctx, later, func(c domain.Content) float64 {
+		if c.Provider == "provider1" && c.ExternalID == "v1" {
+			return c.Score - 5
+		}
+		return c.Score
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	var score float64
+	require.NoError(t, pool.QueryRow(ctx, `SELECT score FROM contents WHERE provider = 'provider1' AND external_id = 'v1'`).Scan(&score))
+	assert.InDelta(t, original-5, score, 1e-9)
 }
