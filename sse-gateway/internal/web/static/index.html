@@ -179,8 +179,8 @@
         <div class="form-row">
           <label class="field name-field">
             <span>Ad</span>
-            <input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" placeholder="ornek-provider" title="2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar.">
-            <small class="hint-text">2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar.</small>
+            <input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" placeholder="ornek-provider" title="2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar, boşluk içeremez.">
+            <small class="hint-text">2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar, boşluk içeremez.</small>
           </label>
           <label class="field grow"><span>URL</span><input name="url" type="url" required placeholder="https://..."></label>
           <label class="field">
@@ -228,8 +228,8 @@
       <div id="provider-edit-error" class="error" hidden></div>
       <label>
         <span>Ad</span>
-        <input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" title="2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar.">
-        <small class="muted">2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar. Ad değişince mevcut içerikler ve senkronizasyon geçmişi yeni ada taşınır.</small>
+        <input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" title="2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar, boşluk içeremez.">
+        <small class="muted">2-50 karakter: küçük harf, rakam, '-' veya '_'; harf ya da rakamla başlar, boşluk içeremez. Ad değişince mevcut içerikler ve senkronizasyon geçmişi yeni ada taşınır.</small>
       </label>
       <label><span>URL</span><input name="url" type="url" required></label>
       <label>
