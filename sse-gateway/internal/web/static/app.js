@@ -724,6 +724,7 @@
       const run = lastRun[p.name];
       const runText = run
         ? `${run.status === "success" ? "✓" : "✗"} ${fmtDateTime.format(new Date(run.finished_at))} · ${run.upserted} kayıt`
+          + (run.removed ? ` · ${run.removed} kaldırıldı` : "")
         : "Henüz yok";
       const runCell = cell(runText, "hide-sm");
       if (run?.error) runCell.title = run.error;

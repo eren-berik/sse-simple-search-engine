@@ -372,6 +372,16 @@ Geçersiz kayıtlar loglanıp atlanır.
 - Breaker provider ve URL başınadır: admin bozuk URL'yi düzelttiğinde yeni URL kapalı bir devreyle başlar. Format algılama breaker kullanmaz. İptal edilen bir sync hata sayılmaz.
 - Breaker durumu bellekte tutulur; servis yeniden başlarsa devreler kapalı başlar. Tek instance için yeterli.
 
+**Kaynakta silinen içerik:**
+- Provider bir kaydı artık döndürmüyorsa, kayıt bizde de aramadan ve detaydan kalkar. Kayıt silinmez, `removed_at` ile işaretlenir; provider onu tekrar döndürürse upsert işareti kaldırır ve kayıt kendiliğinden geri gelir.
+- **Yalnızca güvenilir bir akıştan sonra yapılır.** Üç koşulun hepsi sağlanmalı:
+  - akış tam olmalı: bütün sayfalar alınmış olmalı (bkz. sayfalama);
+  - hiçbir kayıt okunamadığı için atlanmamış olmalı (atlanan kayıt kaynakta hâlâ var, sadece okunamadı);
+  - akış boş olmamalı (boş bir akış genelde provider'ın bozulduğunu, her şeyi sildiğini değil, gösterir).
+  Bu koşullardan biri sağlanmazsa hiçbir şey kaldırılmaz ve durum loglanır. Case'in mock'ları 150 kayıt bildirip 4 tane verdiği için eksik sayılır; onlardan hiçbir şey kaldırılmaz.
+- Kaldırılan kayıt sayısı her çalışmada `sync_runs.removed` alanına ve `sync_items_removed_total` metriğine yazılır; dashboard'daki provider tablosu da "· 2 kaldırıldı" şeklinde gösterir.
+- Kaldırılan kayıtlar arama sonuçlarında, detayda, içerik sayılarında ve skor yeniden hesaplamasında yer almaz.
+
 **Hata izolasyonu:**
 - Provider'lar paralel çekilir; biri başarısız olsa bile diğerlerinin verisi yazılır.
 - Her çalışmanın sonucu `sync_runs` tablosuna kaydedilir.
@@ -486,7 +496,7 @@ Tam şema için [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi
 | gateway | `gateway_upstream_retries_total`, `gateway_circuit_rejected_total` | Retry'lar ve açık devre yüzünden hızlı redler |
 | iam | `auth_events_total{event,result}` | register / login / refresh / logout sonuçları |
 | sse | `search_requests_total{cache}` | HIT / MISS / BYPASS |
-| sse | `sync_runs_total{provider,status}`, `sync_duration_seconds`, `sync_items_upserted_total` | Sync çalışmaları (periyodik ve manuel) |
+| sse | `sync_runs_total{provider,status}`, `sync_duration_seconds`, `sync_items_upserted_total`, `sync_items_removed_total` | Sync çalışmaları (periyodik ve manuel) ve kaynakta silindiği için gizlenen kayıtlar |
 | sse | `contents_stored{provider,type}`, `provider_enabled`, `provider_circuit_state` | Prometheus okuduğu anda veritabanından ve breaker'lardan hesaplanır |
 
 Notlar:

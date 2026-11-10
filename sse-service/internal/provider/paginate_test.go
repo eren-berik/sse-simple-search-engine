@@ -190,6 +190,9 @@ func TestFetchPagesCompletion(t *testing.T) {
 			assert.Equal(t, tt.want, ids(feed))
 			assert.Equal(t, tt.complete, feed.Complete)
 			assert.Len(t, g.requested, tt.requests)
+			if tt.name == "skipped items count towards the total" {
+				assert.Equal(t, 1, feed.Skipped, "the feed reports unreadable items")
+			}
 		})
 	}
 }

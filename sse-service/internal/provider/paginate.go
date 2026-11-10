@@ -34,6 +34,9 @@ type Feed struct {
 	// ignores the page parameter, or the page limit was reached) an item missing from Contents
 	// may still exist at the provider and must not be treated as removed.
 	Complete bool
+	// Skipped counts items that arrived but could not be converted. They still exist at the
+	// provider, so they must not be treated as removed either.
+	Skipped int
 }
 
 // PageParser decodes one page payload.
@@ -83,6 +86,7 @@ func FetchPages(ctx context.Context, get Getter, feedURL string, parse PageParse
 			seen[c.ExternalID] = true
 		}
 		feed.Contents = append(feed.Contents, page.Contents...)
+		feed.Skipped += len(page.Skipped)
 		received += page.received()
 
 		switch {

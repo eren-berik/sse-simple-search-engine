@@ -17,5 +17,7 @@ type SyncRun struct {
 	Status     SyncStatus `json:"status"`
 	Fetched    int        `json:"fetched"`
 	Upserted   int        `json:"upserted"`
-	Error      string     `json:"error,omitempty"`
+	// Removed counts stored items the provider no longer returns (only after a complete feed).
+	Removed int    `json:"removed"`
+	Error   string `json:"error,omitempty"`
 }

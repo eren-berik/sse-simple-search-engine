@@ -19,6 +19,8 @@ import (
 type Store interface {
 	UpsertContents(ctx context.Context, contents []domain.Content) (int, error)
 	RecalculateScores(ctx context.Context, before time.Time, score func(domain.Content) float64) (int, error)
+	// MarkRemoved hides the provider's items that are not in keep.
+	MarkRemoved(ctx context.Context, provider string, keep []string, now time.Time) (int, error)
 	RecordSyncRun(ctx context.Context, run domain.SyncRun) error
 	LatestSyncRuns(ctx context.Context) ([]domain.SyncRun, error)
 }
@@ -146,12 +148,11 @@ func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.
 	log := s.log.With("provider", cfg.Name)
 
 	p, err := s.builder.Build(cfg)
-	var contents []domain.Content
+	var feed provider.Feed
 	if err == nil {
-		var feed provider.Feed
 		feed, err = p.Fetch(ctx)
-		contents = feed.Contents
 	}
+	contents := feed.Contents
 	if err == nil {
 		run.Fetched = len(contents)
 		scoredAt := s.now()
@@ -160,6 +161,9 @@ func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.
 			contents[i].ScoreUpdatedAt = scoredAt
 		}
 		run.Upserted, err = s.store.UpsertContents(ctx, contents)
+	}
+	if err == nil {
+		run.Removed, err = s.removeVanished(ctx, cfg.Name, feed, log)
 	}
 	switch {
 	case errors.Is(err, httpclient.ErrCircuitOpen):
@@ -171,7 +175,7 @@ func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.
 		run.Error = err.Error()
 		log.Error("provider sync failed", "error", err)
 	default:
-		log.Info("provider synced", "fetched", run.Fetched, "upserted", run.Upserted)
+		log.Info("provider synced", "fetched", run.Fetched, "upserted", run.Upserted, "removed", run.Removed)
 	}
 	run.FinishedAt = s.now()
 
@@ -182,6 +186,36 @@ func (s *Service) syncProvider(ctx context.Context, cfg domain.Provider) domain.
 		log.Error("recording sync run failed", "error", err)
 	}
 	return run
+}
+
+// removeVanished hides stored items the provider no longer returns. It only acts on a feed
+// known to be whole: when pages are missing or items could not be read, an absent item may
+// still exist at the provider. An empty feed is not trusted either, since it usually means a
+// broken provider rather than one that deleted everything.
+func (s *Service) removeVanished(ctx context.Context, providerName string, feed provider.Feed, log *slog.Logger) (int, error) {
+	switch {
+	case !feed.Complete:
+		log.Info("feed is incomplete; keeping items missing from it")
+		return 0, nil
+	case feed.Skipped > 0:
+		log.Info("some items could not be read; keeping items missing from the feed", "skipped", feed.Skipped)
+		return 0, nil
+	case len(feed.Contents) == 0:
+		log.Warn("provider returned an empty feed; keeping its stored items")
+		return 0, nil
+	}
+	keep := make([]string, len(feed.Contents))
+	for i, c := range feed.Contents {
+		keep[i] = c.ExternalID
+	}
+	removed, err := s.store.MarkRemoved(ctx, providerName, keep, s.now())
+	if err != nil {
+		return 0, err
+	}
+	if removed > 0 {
+		log.Info("items no longer returned by the provider were removed", "removed", removed)
+	}
+	return removed, nil
 }
 
 // Status returns the latest sync run of each provider.

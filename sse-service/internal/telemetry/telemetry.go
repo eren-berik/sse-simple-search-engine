@@ -21,6 +21,7 @@ type Metrics struct {
 	syncRuns     *prometheus.CounterVec
 	syncDuration *prometheus.HistogramVec
 	upserted     *prometheus.CounterVec
+	removed      *prometheus.CounterVec
 }
 
 func New(reg prometheus.Registerer) *Metrics {
@@ -42,8 +43,12 @@ func New(reg prometheus.Registerer) *Metrics {
 			Name: "sync_items_upserted_total",
 			Help: "Content items written by sync runs, by provider.",
 		}, []string{"provider"}),
+		removed: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "sync_items_removed_total",
+			Help: "Stored items hidden because their provider no longer returns them.",
+		}, []string{"provider"}),
 	}
-	reg.MustRegister(m.searches, m.syncRuns, m.syncDuration, m.upserted)
+	reg.MustRegister(m.searches, m.syncRuns, m.syncDuration, m.upserted, m.removed)
 	// Start at zero: a counter that first appears with value 1 shows no increase.
 	for _, status := range []search.CacheStatus{search.CacheHit, search.CacheMiss, search.CacheBypass} {
 		m.searches.WithLabelValues(string(status))
@@ -79,6 +84,7 @@ func (s *searcher) Search(ctx context.Context, q domain.SearchQuery) (domain.Sea
 type SyncStore interface {
 	UpsertContents(ctx context.Context, contents []domain.Content) (int, error)
 	RecalculateScores(ctx context.Context, before time.Time, score func(domain.Content) float64) (int, error)
+	MarkRemoved(ctx context.Context, provider string, keep []string, now time.Time) (int, error)
 	RecordSyncRun(ctx context.Context, run domain.SyncRun) error
 	LatestSyncRuns(ctx context.Context) ([]domain.SyncRun, error)
 }
@@ -98,6 +104,7 @@ func (s *syncStore) RecordSyncRun(ctx context.Context, run domain.SyncRun) error
 	s.m.syncRuns.WithLabelValues(run.Provider, string(run.Status)).Inc()
 	s.m.syncDuration.WithLabelValues(run.Provider).Observe(run.FinishedAt.Sub(run.StartedAt).Seconds())
 	s.m.upserted.WithLabelValues(run.Provider).Add(float64(run.Upserted))
+	s.m.removed.WithLabelValues(run.Provider).Add(float64(run.Removed))
 	return s.SyncStore.RecordSyncRun(ctx, run)
 }
 
