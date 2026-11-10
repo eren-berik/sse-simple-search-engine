@@ -235,6 +235,22 @@ Provider'lara giden istekler gateway'den geçmez. Onların rate limit, retry ve 
 
 > ⚠️ **Rol seçimi bilinçli olarak serbest.** İstendiği gibi register isteğinde rol serbestçe seçilebiliyor; yani herkes kendini admin olarak kaydedebilir. Bu demo için kabul edilebilir, ama gerçek bir sistemde public register'ın her zaman `viewer` oluşturması, admin yetkisinin ise ayrı bir kanaldan verilmesi gerekir (davet kodu, mevcut bir admin'in onayı ya da başlangıçta oluşturulan bir admin hesabı).
 
+### Dashboard
+
+Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüz (HTML, CSS, vanilla JS). Gateway binary'sine gömülü; açık ve koyu temayı sistem ayarına göre seçiyor ve telefon genişliğinde de çalışıyor.
+
+- **Sonuç listesi:** Her içerik bir satır kartında gösteriliyor: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Sağda skor ve aynı sayfadaki en yüksek skora göre bir çubuk var. Alakalılık sıralamasında alakalılık puanı da görünüyor.
+- **Metrikler tek bakışta:** Her kartta dört metrik sütunu var. Sütunlar her satırda aynı yerde durduğu için değerler alt alta karşılaştırılabiliyor:
+
+  | | 1 | 2 | 3 | 4 |
+  |---|---|---|---|---|
+  | Video | Görüntülenme | Beğeni | Süre | Beğeni oranı (beğeni / görüntülenme) |
+  | Metin | Okuma süresi | Reaksiyon | Yorum | Reaksiyon / dk |
+
+  Dördüncü sütun, skor formülündeki etkileşim oranı. Sayılar 1 milyona kadar tam yazılıyor; Türkçe kısaltmadaki "B" (bin) "milyar" gibi okunabildiği için kısaltma sadece milyonun üstünde kullanılıyor.
+- **Filtreler:** Arama kutusu, tür için Tümü/Video/Metin seçimi, provider, sıralama ve sayfa boyutu. Sayfalama numaralı.
+- **Detay penceresi:** Metriklerin tam değerleri ve skorun nasıl hesaplandığı gösteriliyor: temel puan × katsayı, güncellik ve etkileşim renkli bir çubukta, altında da formülün sayılarla hali (`27 × 1,5 + 0 + 0,8 = 41,3`).
+
 ### Dashboard'da oturum
 
 Token'lar `sessionStorage`'da tutulur: sayfa yenilense de kalır, sekme kapanınca silinir. Bir istek 401 döndüğünde access token sessizce refresh edilip istek tekrarlanır. Aynı anda gelen 401'ler tek bir refresh isteğinde birleştirilir; böylece rotasyona uğramış bir refresh token asla iki kez gönderilmez (gönderilseydi tekrar kullanım tespiti tüm oturumu kapatırdı). Admin'ler "Provider'lar" sekmesini görür; viewer'a bu sekme hiç gösterilmez, sunucu tarafında da reddedilir.
