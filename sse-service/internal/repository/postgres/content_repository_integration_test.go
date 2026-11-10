@@ -246,3 +246,29 @@ func TestCountContents(t *testing.T) {
 		{Provider: "provider2", Type: domain.ContentTypeText, Count: 1},
 	}, counts)
 }
+
+func TestSearchByTagAndDate(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+	day := func(s string) time.Time {
+		d, err := time.Parse(time.DateOnly, s)
+		require.NoError(t, err)
+		return d
+	}
+
+	res := search(t, repo, domain.SearchQuery{Tag: "devops"})
+	assert.ElementsMatch(t, []string{"Introduction to Docker", "Kubernetes for Beginners", "CI/CD Pipeline Implementation"}, titles(res))
+
+	// Both ends are inclusive days: 14:30 on the 14th is in, the 15th is out.
+	res = search(t, repo, domain.SearchQuery{PublishedFrom: day("2024-03-14"), PublishedTo: day("2024-03-14")})
+	assert.ElementsMatch(t, []string{"Advanced Go Concurrency Patterns", "Kubernetes for Beginners", "Clean Architecture in Go"}, titles(res))
+
+	res = search(t, repo, domain.SearchQuery{Tag: "programming", PublishedFrom: day("2024-03-14")})
+	assert.ElementsMatch(t, []string{"Go Programming Tutorial", "Advanced Go Concurrency Patterns", "Clean Architecture in Go"}, titles(res),
+		"filters combine; an open end is unbounded")
+
+	res = search(t, repo, domain.SearchQuery{Keyword: "go", Tag: "testing"})
+	assert.Equal(t, []string{"Go Testing Best Practices"}, titles(res))
+
+	assert.Empty(t, titles(search(t, repo, domain.SearchQuery{Tag: "nope"})))
+}

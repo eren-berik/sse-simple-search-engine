@@ -183,6 +183,9 @@ paths:
         - { name: q, in: query, schema: { type: string, maxLength: 200 }, example: go, description: 'Supports websearch syntax such as "exact phrase" and -exclude.' }
         - { name: type, in: query, schema: { type: string, enum: [video, text] } }
         - { name: provider, in: query, schema: { type: string }, description: Provider name }
+        - { name: tag, in: query, schema: { type: string, maxLength: 50 }, example: devops, description: 'Only contents carrying this tag (case-insensitive)' }
+        - { name: published_from, in: query, schema: { type: string, format: date }, example: '2024-03-01', description: 'Published on or after this day (YYYY-MM-DD, UTC)' }
+        - { name: published_to, in: query, schema: { type: string, format: date }, example: '2024-03-31', description: 'Published on or before this day (YYYY-MM-DD, UTC, inclusive)' }
         - { name: sort, in: query, schema: { type: string, enum: [popularity, relevance] } }
         - { name: page, in: query, schema: { type: integer, minimum: 1, default: 1 } }
         - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }

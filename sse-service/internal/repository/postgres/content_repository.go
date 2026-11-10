@@ -130,6 +130,20 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		args["provider"] = q.Provider
 		conds = append(conds, `provider = @provider`)
 	}
+	if q.Tag != "" {
+		// Tags are stored lowercase; @> can use the GIN index on tags.
+		args["tag"] = []string{q.Tag}
+		conds = append(conds, `tags @> @tag::text[]`)
+	}
+	if !q.PublishedFrom.IsZero() {
+		args["from"] = q.PublishedFrom
+		conds = append(conds, `published_at >= @from`)
+	}
+	if !q.PublishedTo.IsZero() {
+		// The end day is inclusive: everything before the start of the next day.
+		args["to"] = q.PublishedTo.AddDate(0, 0, 1)
+		conds = append(conds, `published_at < @to`)
+	}
 
 	where := "WHERE " + strings.Join(conds, " AND ")
 	orderBy := "score DESC, id ASC"
