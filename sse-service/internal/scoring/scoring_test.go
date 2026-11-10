@@ -114,3 +114,54 @@ func TestCustomCoefficients(t *testing.T) {
 	// base = 1 + 1 = 2; 2*2 = 4; engagement = 0.1*10 = 1
 	assert.InDelta(t, 5.0, got.Final, 1e-9)
 }
+
+func TestExplanationMatchesTheScore(t *testing.T) {
+	s := newScorer()
+
+	t.Run("text", func(t *testing.T) {
+		b := s.Score(domain.Content{
+			Type:        domain.ContentTypeText,
+			Metrics:     domain.Metrics{ReadingTime: 8, Reactions: 450},
+			PublishedAt: fixedNow.AddDate(-1, 0, 0),
+		})
+		e := b.Explanation
+
+		assert.Equal(t, []BaseTerm{
+			{Metric: "reading_time", Value: 8, Divisor: 1, Result: 8},
+			{Metric: "reactions", Value: 450, Divisor: 50, Result: 9},
+		}, e.BaseTerms)
+		assert.Equal(t, EngagementTerm{
+			Numerator: "reactions", NumeratorValue: 450, Denominator: "reading_time", DenominatorValue: 8,
+			Multiplier: 5, Result: 281.25,
+		}, e.Engagement)
+		assert.Equal(t, -1, e.Recency.MatchedTier, "a year old: no tier applies")
+		assert.Equal(t, 0.0, e.Recency.Points)
+	})
+
+	t.Run("video published two days ago", func(t *testing.T) {
+		b := s.Score(domain.Content{
+			Type:        domain.ContentTypeVideo,
+			Metrics:     domain.Metrics{Views: 15000, Likes: 1200},
+			PublishedAt: fixedNow.Add(-50 * time.Hour),
+		})
+		e := b.Explanation
+
+		var sum float64
+		for _, term := range e.BaseTerms {
+			sum += term.Result
+		}
+		assert.InDelta(t, b.Base, sum, 1e-9, "the terms add up to the base")
+		assert.Equal(t, []string{"views", "likes"}, []string{e.BaseTerms[0].Metric, e.BaseTerms[1].Metric})
+		assert.InDelta(t, b.Engagement, e.Engagement.Result, 1e-9)
+		assert.Equal(t, 2.0, e.Recency.AgeDays)
+		assert.Equal(t, 0, e.Recency.MatchedTier)
+		assert.Equal(t, []RecencyRow{{7, 5}, {30, 3}, {90, 1}}, e.Recency.Tiers)
+		assert.InDelta(t, b.Recency, e.Recency.Points, 1e-9)
+	})
+
+	t.Run("zero denominator", func(t *testing.T) {
+		e := s.Score(domain.Content{Type: domain.ContentTypeVideo, Metrics: domain.Metrics{Likes: 5}, PublishedAt: fixedNow}).Explanation
+		assert.Equal(t, 0.0, e.Engagement.DenominatorValue)
+		assert.Equal(t, 0.0, e.Engagement.Result)
+	})
+}

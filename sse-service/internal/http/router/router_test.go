@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,10 @@ func (f *fakeSearcher) Get(_ context.Context, id int64) (domain.Content, scoring
 	if id != 1 {
 		return domain.Content{}, scoring.Breakdown{}, domain.ErrNotFound
 	}
-	return domain.Content{ID: 1, Title: "Go", Type: domain.ContentTypeVideo}, scoring.Breakdown{Base: 27, TypeCoefficient: 1.5, Engagement: 0.8, Final: 41.3}, nil
+	c := domain.Content{ID: 1, Title: "Go", Type: domain.ContentTypeVideo, Metrics: domain.Metrics{Views: 15000, Likes: 1200},
+		PublishedAt: time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC)}
+	now := func() time.Time { return time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC) }
+	return c, scoring.New(scoring.DefaultConfig(), now).Score(c), nil
 }
 
 type fakeSyncer struct{ err error }
@@ -239,6 +243,13 @@ func TestGetContent(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	breakdown := body["data"].(map[string]any)["score_breakdown"].(map[string]any)
 	assert.Equal(t, 41.3, breakdown["final"])
+	// The explanation survives the handler's rounding.
+	explanation := breakdown["explanation"].(map[string]any)
+	terms := explanation["base_terms"].([]any)
+	require.Len(t, terms, 2)
+	assert.Equal(t, map[string]any{"metric": "views", "value": 15000.0, "divisor": 1000.0, "result": 15.0}, terms[0])
+	assert.Equal(t, 0.8, explanation["engagement"].(map[string]any)["result"])
+	assert.Equal(t, -1.0, explanation["recency"].(map[string]any)["matched_tier"])
 
 	resp, body = app.get("/api/v1/contents/2")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
