@@ -9,18 +9,55 @@
     const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = String(sec % 60).padStart(2, "0");
     return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
   };
-  // Labels and value formats for the metrics shown in the content detail dialog.
-  const metricFields = {
-    views: { label: "Görüntülemeler", format: (v) => fmtNumber.format(v) },
-    likes: { label: "Beğeniler", format: (v) => fmtNumber.format(v) },
-    duration_sec: { label: "Süre", format: formatDuration },
-    reading_time: { label: "Okuma Süresi", format: (v) => `${fmtNumber.format(v)} dk` },
-    reactions: { label: "Reaksiyonlar", format: (v) => fmtNumber.format(v) },
-    comments: { label: "Yorumlar", format: (v) => fmtNumber.format(v) },
-  };
   const fmtNumber = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 2 });
   const fmtDate = new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium" });
   const fmtDateTime = new Intl.DateTimeFormat("tr-TR", { dateStyle: "short", timeStyle: "short" });
+  const fmtCompact = new Intl.NumberFormat("tr-TR", { notation: "compact", maximumFractionDigits: 1 });
+  // Turkish compact notation writes thousands as "B" (bin), which reads like "billion" in an
+  // international product, so counts are written in full below a million ("1,2 Mn" above).
+  const fmtCount = (v) => (v >= 1e6 ? fmtCompact : fmtNumber).format(v);
+  const fmtPercent = new Intl.NumberFormat("tr-TR", { style: "percent", maximumFractionDigits: 1 });
+
+  // Each type shows four metric columns in the same positions, so rows can be compared at a
+  // glance. The fourth is the engagement ratio the score formula uses.
+  const metricColumns = {
+    video: [
+      { icon: "eye", label: "Görüntülenme", value: (m) => fmtCount(m.views ?? 0), title: (m) => fmtNumber.format(m.views ?? 0) },
+      { icon: "heart", label: "Beğeni", value: (m) => fmtCount(m.likes ?? 0), title: (m) => fmtNumber.format(m.likes ?? 0) },
+      { icon: "clock", label: "Süre", value: (m) => formatDuration(m.duration_sec ?? 0) },
+      { icon: "trend", label: "Beğeni oranı", engagement: true,
+        value: (m) => (m.views ? fmtPercent.format((m.likes ?? 0) / m.views) : "-") },
+    ],
+    text: [
+      { icon: "book", label: "Okuma süresi", value: (m) => `${fmtNumber.format(m.reading_time ?? 0)} dk` },
+      { icon: "spark", label: "Reaksiyon", value: (m) => fmtCount(m.reactions ?? 0), title: (m) => fmtNumber.format(m.reactions ?? 0) },
+      { icon: "message", label: "Yorum", value: (m) => fmtCount(m.comments ?? 0), title: (m) => fmtNumber.format(m.comments ?? 0) },
+      { icon: "trend", label: "Reaksiyon / dk", engagement: true,
+        value: (m) => (m.reading_time ? fmtNumber.format((m.reactions ?? 0) / m.reading_time) : "-") },
+    ],
+  };
+
+  // Lucide icons (ISC licence), inlined so the dashboard stays dependency-free.
+  const icons = {
+    sync: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+    edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+    disable: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+    enable: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+    delete: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+    eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
+    heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    book: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+    spark: '<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0L14.06 8.5A2 2 0 0 0 15.5 9.94l6.14 1.58a.5.5 0 0 1 0 .96L15.5 14.06a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>',
+    message: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
+    trend: '<path d="M22 7 13.5 15.5 8.5 10.5 2 17"/><path d="M16 7h6v6"/>',
+    video: '<path d="m16 13 5.22 3.48a.5.5 0 0 0 .78-.42V7.87a.5.5 0 0 0-.75-.43L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
+    text: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  };
+
+  function svgIcon(name, size = 16) {
+    return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[name]}</svg>`;
+  }
 
   // ---------------------------------------------------------------- session
   // Tokens live in sessionStorage: they survive reloads but not closing the tab.
@@ -161,6 +198,7 @@
   // ---------------------------------------------------------------- views
   function showAuth(message) {
     $("app-view").hidden = true;
+    $("app-tabs").hidden = true;
     $("user-box").hidden = true;
     $("auth-view").hidden = false;
     // Always come back to the login form, e.g. after registering and then logging out.
@@ -173,6 +211,9 @@
     $("app-view").hidden = false;
     $("user-box").hidden = false;
     $("user-name").textContent = session.user.username;
+    $("user-avatar").textContent = session.user.username.charAt(0);
+    // Viewers only have the contents panel, so they need no tabs.
+    $("app-tabs").hidden = !isAdmin();
     const role = $("user-role");
     role.textContent = roleLabels[session.user.role] || session.user.role;
     role.className = `role ${session.user.role}`;
@@ -203,12 +244,13 @@
   function resetAppView() {
     clearTimeout(debounce);
     $("filters").reset();
+    setType("");
     $("provider").replaceChildren(new Option("Tümü", ""));
     state.page = 1;
     state.totalPages = 0;
-    $("rows").replaceChildren();
-    $("page-info").textContent = "";
-    $("relevance-col").hidden = true;
+    $("results").replaceChildren();
+    $("pager").replaceChildren();
+    $("summary").textContent = "";
     $("sort-hint").hidden = true;
     $("provider-rows").replaceChildren();
     $("provider-form").reset();
@@ -286,43 +328,121 @@
   // ---------------------------------------------------------------- contents
   const state = { page: 1, totalPages: 0 };
 
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function metricCell(column, metrics, extraClass = "") {
+    const box = el("div", `metric ${column.engagement ? "engagement" : ""} ${extraClass}`.trim());
+    const value = el("span", "metric-value");
+    value.innerHTML = svgIcon(column.icon, 14);
+    value.append(column.value(metrics));
+    if (column.title) box.title = `${column.label}: ${column.title(metrics)}`;
+    box.append(value, el("span", "metric-label", column.label));
+    return box;
+  }
+
+  function typeIcon(type, size = 20) {
+    const box = el("div", `type-icon ${type}`);
+    box.innerHTML = svgIcon(type === "video" ? "video" : "text", size);
+    box.title = typeLabels[type] || type;
+    return box;
+  }
+
+  function renderItem(item, rank, maxScore, showRelevance) {
+    const li = el("li", "item");
+    li.tabIndex = 0;
+    li.setAttribute("aria-label", `${item.title}, skor ${fmtNumber.format(item.score)}`);
+
+    const main = el("div", "item-main");
+    const meta = el("div", "item-meta");
+    meta.append(el("span", "", typeLabels[item.type] || item.type), el("span", "dot", item.provider),
+      el("span", "dot", fmtDate.format(new Date(item.published_at))));
+    for (const tag of item.tags.slice(0, 3)) meta.append(el("span", "chip", tag));
+    main.append(el("h3", "item-title", item.title), meta);
+
+    const metrics = el("div", "metrics");
+    for (const column of metricColumns[item.type] || []) metrics.append(metricCell(column, item.metrics));
+
+    const score = el("div", "score");
+    const bar = el("div", "score-bar");
+    const fill = el("span");
+    fill.style.width = `${Math.max(4, (item.score / maxScore) * 100)}%`;
+    bar.append(fill);
+    bar.title = "Bu sayfadaki en yüksek skora göre";
+    score.append(el("span", "score-value", fmtNumber.format(item.score)), el("span", "score-label", "Skor"), bar);
+    if (showRelevance) score.append(el("span", "relevance", `Alakalılık ${fmtNumber.format(item.relevance ?? 0)}`));
+
+    li.append(el("span", "rank", `#${rank}`), typeIcon(item.type), main, metrics, score);
+    li.addEventListener("click", () => openDetail(item.id));
+    li.addEventListener("keydown", (e) => { if (e.key === "Enter") openDetail(item.id); });
+    return li;
+  }
+
+  function renderSkeleton(count) {
+    const list = $("results");
+    list.replaceChildren();
+    for (let i = 0; i < Math.min(count, 6); i++) {
+      const li = el("li", "item skeleton");
+      li.append(el("span"), el("div", "bone"), el("div", "bone"), el("div", "bone"), el("div", "bone"));
+      list.append(li);
+    }
+  }
+
   function renderContents(items, meta) {
-    const rows = $("rows");
-    rows.replaceChildren();
+    const list = $("results");
+    list.replaceChildren();
     const showRelevance = meta.sort === "relevance";
-    $("relevance-col").hidden = !showRelevance;
     // The API falls back to popularity when relevance is requested without a keyword; say so.
     $("sort-hint").hidden = !($("sort").value === "relevance" && !showRelevance);
 
+    const summary = $("summary");
+    summary.replaceChildren();
+    if (meta.total) {
+      summary.append(el("strong", "", fmtNumber.format(meta.total)), ` sonuç · ${sortLabels[meta.sort] || meta.sort} sıralaması`);
+    }
+
     if (items.length === 0) {
-      const tr = document.createElement("tr");
-      const td = cell("Sonuç bulunamadı.", "empty");
-      td.colSpan = 6;
-      tr.append(td);
-      rows.append(tr);
+      const empty = el("li", "empty-state");
+      empty.append(el("strong", "", "Sonuç bulunamadı"), "Farklı bir anahtar kelime deneyin ya da filtreleri gevşetin.");
+      list.append(empty);
     }
 
-    for (const item of items) {
-      const tr = document.createElement("tr");
-      tr.tabIndex = 0;
-      const typeCell = document.createElement("td");
-      typeCell.append(badge(typeLabels[item.type] || item.type, item.type));
-
-      tr.append(cell(item.title), typeCell, cell(fmtNumber.format(item.score), "num"));
-      if (showRelevance) tr.append(cell(fmtNumber.format(item.relevance ?? 0), "num"));
-      tr.append(cell(item.provider, "hide-sm"), cell(fmtDate.format(new Date(item.published_at)), "hide-sm"));
-
-      tr.addEventListener("click", () => openDetail(item.id));
-      tr.addEventListener("keydown", (e) => { if (e.key === "Enter") openDetail(item.id); });
-      rows.append(tr);
-    }
+    const maxScore = Math.max(...items.map((i) => i.score), 1);
+    const offset = (meta.page - 1) * meta.per_page;
+    items.forEach((item, i) => list.append(renderItem(item, offset + i + 1, maxScore, showRelevance)));
 
     state.totalPages = meta.total_pages;
-    $("page-info").textContent = meta.total
-      ? `Sayfa ${meta.page} / ${meta.total_pages} · ${meta.total} sonuç · Sıralama: ${sortLabels[meta.sort] || meta.sort}`
-      : "";
-    $("prev").disabled = meta.page <= 1;
-    $("next").disabled = meta.page >= meta.total_pages;
+    renderPager(meta.page, meta.total_pages);
+  }
+
+  // renderPager shows the first, last and nearby pages, with gaps in between.
+  function renderPager(page, total) {
+    const pager = $("pager");
+    pager.replaceChildren();
+    if (total <= 1) return;
+    const goTo = (p) => { state.page = p; loadContents(); };
+    const button = (label, p, { current = false, disabled = false, aria } = {}) => {
+      const b = el("button", "secondary", label);
+      b.type = "button";
+      b.disabled = disabled;
+      if (current) b.setAttribute("aria-current", "page");
+      if (aria) b.setAttribute("aria-label", aria);
+      b.addEventListener("click", () => goTo(p));
+      return b;
+    };
+    pager.append(button("←", page - 1, { disabled: page <= 1, aria: "Önceki sayfa" }));
+    let last = 0;
+    for (let p = 1; p <= total; p++) {
+      if (p !== 1 && p !== total && Math.abs(p - page) > 1) continue;
+      if (p - last > 1) pager.append(el("span", "gap", "…"));
+      pager.append(button(String(p), p, { current: p === page }));
+      last = p;
+    }
+    pager.append(button("→", page + 1, { disabled: page >= total, aria: "Sonraki sayfa" }));
   }
 
   async function loadContents() {
@@ -334,13 +454,16 @@
     }
     params.set("page", state.page);
 
+    renderSkeleton(Number($("per_page").value));
     try {
       const { data } = await api(`/api/v1/contents?${params}`);
       if (isStale(epoch)) return;
       showError($("error"), "");
       renderContents(data.data, data.meta);
     } catch (err) {
-      if (!isStale(epoch)) showError($("error"), err.message);
+      if (isStale(epoch)) return;
+      $("results").replaceChildren();
+      showError($("error"), err.message);
     }
   }
 
@@ -360,6 +483,13 @@
     }
   }
 
+  // Score parts in the order of the formula: base × coefficient + recency + engagement.
+  const scoreParts = [
+    { key: "weighted", label: "Temel puan × tür katsayısı", color: "#6366f1" },
+    { key: "recency", label: "Güncellik", color: "#06b6d4" },
+    { key: "engagement", label: "Etkileşim", color: "#10b981" },
+  ];
+
   async function openDetail(id) {
     const epoch = authEpoch;
     try {
@@ -367,34 +497,65 @@
       if (isStale(epoch)) return;
       const c = data.data;
       const b = c.score_breakdown;
+
+      const kicker = $("detail-kicker");
+      kicker.replaceChildren(badge(typeLabels[c.type] || c.type, c.type));
       $("detail-title").textContent = c.title;
-      const entries = [
-        ["Tür", typeLabels[c.type] || c.type],
-        ["Provider", `${c.provider} (${c.external_id})`],
-        ["Etiketler", c.tags.join(", ") || "-"],
-        ...Object.entries(c.metrics).map(([k, v]) => {
-          const field = metricFields[k];
-          return field ? [field.label, field.format(v)] : [k, fmtNumber.format(v)];
-        }),
-        ["Temel puan", fmtNumber.format(b.base)],
-        ["Tür katsayısı", fmtNumber.format(b.type_coefficient)],
-        ["Güncellik puanı", fmtNumber.format(b.recency)],
-        ["Etkileşim puanı", fmtNumber.format(b.engagement)],
-        ["Final skor", fmtNumber.format(b.final)],
-      ];
-      const dl = $("detail-body");
-      dl.replaceChildren();
-      for (const [k, v] of entries) {
-        const dt = document.createElement("dt");
-        dt.textContent = k;
-        const dd = document.createElement("dd");
-        dd.textContent = v;
-        dl.append(dt, dd);
+      $("detail-meta").textContent = `${c.provider} · #${c.external_id} · ${fmtDate.format(new Date(c.published_at))}`;
+
+      const tiles = $("detail-metrics");
+      tiles.replaceChildren();
+      for (const column of metricColumns[c.type] || []) {
+        const exact = column.title ? { ...column, value: column.title } : column;
+        tiles.append(metricCell(exact, c.metrics));
       }
+
+      $("detail-final").textContent = fmtNumber.format(b.final);
+      const parts = { weighted: b.base * b.type_coefficient, recency: b.recency, engagement: b.engagement };
+      const bar = $("detail-bar");
+      const list = $("detail-breakdown");
+      bar.replaceChildren();
+      list.replaceChildren();
+      for (const part of scoreParts) {
+        const value = parts[part.key];
+        if (b.final > 0 && value > 0) {
+          const seg = el("span");
+          seg.style.width = `${(value / b.final) * 100}%`;
+          seg.style.background = part.color;
+          seg.title = `${part.label}: ${fmtNumber.format(value)}`;
+          bar.append(seg);
+        }
+        const dt = el("dt");
+        const swatch = el("span", "swatch");
+        swatch.style.background = part.color;
+        dt.append(swatch, part.label);
+        list.append(dt, el("dd", "", fmtNumber.format(value)));
+      }
+      $("detail-formula").textContent =
+        `${fmtNumber.format(b.base)} × ${fmtNumber.format(b.type_coefficient)} + ${fmtNumber.format(b.recency)} + ${fmtNumber.format(b.engagement)} = ${fmtNumber.format(b.final)}`;
+
+      const tags = $("detail-tags");
+      tags.replaceChildren(...c.tags.map((t) => el("span", "chip", t)));
       $("detail").showModal();
     } catch (err) {
       if (!isStale(epoch)) showError($("error"), err.message);
     }
+  }
+
+  // The type filter is a segmented control backed by the hidden #type input.
+  function setType(value) {
+    $("type").value = value;
+    for (const b of document.querySelectorAll("#type-seg [data-type]")) {
+      b.setAttribute("aria-checked", String(b.dataset.type === value));
+    }
+  }
+  for (const b of document.querySelectorAll("#type-seg [data-type]")) {
+    b.addEventListener("click", () => {
+      if ($("type").value === b.dataset.type) return;
+      setType(b.dataset.type);
+      state.page = 1;
+      loadContents();
+    });
   }
 
   let debounce;
@@ -402,12 +563,10 @@
     clearTimeout(debounce);
     debounce = setTimeout(() => { state.page = 1; loadContents(); }, 300);
   });
-  for (const id of ["type", "provider", "sort", "per_page"]) {
+  for (const id of ["provider", "sort", "per_page"]) {
     $(id).addEventListener("change", () => { state.page = 1; loadContents(); });
   }
   $("filters").addEventListener("submit", (e) => { e.preventDefault(); state.page = 1; loadContents(); });
-  $("prev").addEventListener("click", () => { if (state.page > 1) { state.page--; loadContents(); } });
-  $("next").addEventListener("click", () => { if (state.page < state.totalPages) { state.page++; loadContents(); } });
 
   // ---------------------------------------------------------------- providers (admin)
   async function loadProviders() {
@@ -425,15 +584,6 @@
     }
   }
 
-  // Lucide icons (ISC licence), inlined so the dashboard stays dependency-free.
-  const icons = {
-    sync: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
-    edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
-    disable: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
-    enable: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
-    delete: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
-  };
-
   // iconButton builds a compact action button; the label doubles as tooltip and accessible name.
   function iconButton(icon, label, extraClass = "") {
     const button = document.createElement("button");
@@ -441,7 +591,7 @@
     button.className = `secondary icon-btn ${extraClass}`.trim();
     button.title = label;
     button.setAttribute("aria-label", label);
-    button.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icons[icon]}</svg>`;
+    button.innerHTML = svgIcon(icon);
     return button;
   }
 

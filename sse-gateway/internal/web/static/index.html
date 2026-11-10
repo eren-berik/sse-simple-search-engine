@@ -4,26 +4,46 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Content Search</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f8a4c'/%3E%3Ccircle cx='14' cy='14' r='6.5' fill='none' stroke='white' stroke-width='3'/%3E%3Cpath d='M19 19l6 6' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Ccircle cx='14' cy='14' r='6.5' fill='none' stroke='white' stroke-width='3'/%3E%3Cpath d='M19 19l6 6' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
-      <h1>Content Search</h1>
-      <span class="muted">JSON ve XML provider'lardan birleştirilmiş içerikler</span>
-    </div>
-    <div id="user-box" class="user" hidden>
-      <span id="user-name"></span>
-      <span id="user-role" class="role"></span>
-      <button id="logout-btn" type="button" class="secondary">Çıkış yap</button>
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg>
+        </span>
+        <div>
+          <h1>Content Search</h1>
+          <span class="muted">JSON ve XML provider'lardan birleştirilmiş içerikler</span>
+        </div>
+      </div>
+
+      <nav id="app-tabs" class="nav-tabs" role="tablist" hidden>
+        <button type="button" role="tab" class="tab" data-panel="contents-panel" aria-selected="true">İçerikler</button>
+        <button type="button" role="tab" class="tab" data-panel="providers-panel" aria-selected="false" data-admin-only>Provider'lar</button>
+      </nav>
+
+      <div id="user-box" class="user" hidden>
+        <span id="user-avatar" class="avatar" aria-hidden="true"></span>
+        <div class="user-meta">
+          <span id="user-name"></span>
+          <span id="user-role" class="role"></span>
+        </div>
+        <button id="logout-btn" type="button" class="secondary">Çıkış yap</button>
+      </div>
     </div>
   </header>
 
   <!-- Authentication -->
   <main id="auth-view" class="auth" hidden>
+    <div class="auth-intro">
+      <h2>Tüm içerikler tek yerde</h2>
+      <p class="muted">Video ve yazıları tek listede arayın, filtreleyin; popülerliğe ya da alakalılığa göre sıralayın.</p>
+    </div>
     <div class="card">
-      <div class="tabs" role="tablist">
+      <div class="seg auth-tabs" role="tablist">
         <button type="button" role="tab" class="tab" data-auth-tab="login" aria-selected="true">Giriş yap</button>
         <button type="button" role="tab" class="tab" data-auth-tab="register" aria-selected="false">Kayıt ol</button>
       </div>
@@ -61,82 +81,67 @@
 
   <!-- Application -->
   <main id="app-view" hidden>
-    <nav class="tabs" role="tablist" data-admin-only>
-      <button type="button" role="tab" class="tab" data-panel="contents-panel" aria-selected="true">İçerikler</button>
-      <button type="button" role="tab" class="tab" data-panel="providers-panel" aria-selected="false">Provider'lar</button>
-    </nav>
-
     <div id="error" class="error" hidden></div>
 
     <section id="contents-panel">
-      <form id="filters" class="filters" autocomplete="off">
-        <label class="grow">
-          <span>Anahtar kelime</span>
-          <input id="q" name="q" type="search" placeholder="örn. go, docker, kubernetes">
+      <form id="filters" class="filter-card" autocomplete="off">
+        <label class="search">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" name="q" type="search" placeholder="Başlık veya etiket ara: go, docker, kubernetes…" aria-label="Anahtar kelime">
         </label>
-        <label>
-          <span>İçerik türü</span>
-          <select id="type" name="type">
-            <option value="">Tümü</option>
-            <option value="video">Video</option>
-            <option value="text">Metin</option>
-          </select>
-        </label>
-        <label>
-          <span>Provider</span>
-          <select id="provider" name="provider">
-            <option value="">Tümü</option>
-          </select>
-        </label>
-        <label>
-          <span>Sıralama</span>
-          <select id="sort" name="sort">
-            <option value="">Otomatik</option>
-            <option value="popularity">Popülerlik</option>
-            <option value="relevance">Alakalılık</option>
-          </select>
-        </label>
-        <label>
-          <span>Sayfa boyutu</span>
-          <select id="per_page" name="per_page">
-            <option>5</option>
-            <option selected>10</option>
-            <option>20</option>
-            <option>50</option>
-          </select>
-        </label>
+
+        <div class="filter-row">
+          <input id="type" name="type" type="hidden" value="">
+          <div class="seg" role="radiogroup" aria-label="İçerik türü" id="type-seg">
+            <button type="button" role="radio" data-type="" aria-checked="true">Tümü</button>
+            <button type="button" role="radio" data-type="video" aria-checked="false">Video</button>
+            <button type="button" role="radio" data-type="text" aria-checked="false">Metin</button>
+          </div>
+
+          <label class="field">
+            <span>Provider</span>
+            <select id="provider" name="provider">
+              <option value="">Tümü</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Sıralama</span>
+            <select id="sort" name="sort">
+              <option value="">Otomatik</option>
+              <option value="popularity">Popülerlik</option>
+              <option value="relevance">Alakalılık</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Sayfa başına</span>
+            <select id="per_page" name="per_page">
+              <option>5</option>
+              <option selected>10</option>
+              <option>20</option>
+              <option>50</option>
+            </select>
+          </label>
+        </div>
       </form>
 
-      <p id="sort-hint" class="hint" hidden>
-        Alakalılık sıralaması bir anahtar kelimeye göre hesaplanır. Kelime girilmediği için sonuçlar popülerliğe göre sıralandı.
-      </p>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Başlık</th>
-              <th>Tür</th>
-              <th class="num">Skor</th>
-              <th class="num" id="relevance-col" hidden>Alakalılık</th>
-              <th class="hide-sm">Provider</th>
-              <th class="hide-sm">Yayın tarihi</th>
-            </tr>
-          </thead>
-          <tbody id="rows"></tbody>
-        </table>
+      <div class="results-head">
+        <p id="summary" class="summary"></p>
+        <p id="sort-hint" class="hint" hidden>
+          Alakalılık bir anahtar kelimeye göre hesaplanır; kelime girilmediği için sonuçlar popülerliğe göre sıralandı.
+        </p>
       </div>
 
-      <nav class="pager">
-        <button id="prev" type="button" class="secondary">← Önceki</button>
-        <span id="page-info" class="muted"></span>
-        <button id="next" type="button" class="secondary">Sonraki →</button>
-      </nav>
+      <ol id="results" class="results" aria-live="polite"></ol>
+
+      <nav id="pager" class="pager" aria-label="Sayfalar"></nav>
     </section>
 
     <section id="providers-panel" hidden data-admin-only>
       <div class="toolbar">
-        <h2>Provider'lar</h2>
+        <div>
+          <h2>Provider'lar</h2>
+          <p class="muted">İçerik kaynakları, durumları ve son senkronizasyon sonuçları.</p>
+        </div>
         <button id="sync-all-btn" type="button">Tümünü senkronize et</button>
       </div>
 
@@ -159,10 +164,10 @@
       <form id="provider-form" class="card provider-form" autocomplete="off">
         <h3>Yeni provider</h3>
         <p class="muted">Format otomatik algılanır: URL'den veri çekilir ve JSON ya da XML şemasına uyup uymadığı kontrol edilir.</p>
-        <div class="filters">
-          <label><span>Ad</span><input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" placeholder="ornek-provider"></label>
-          <label class="grow"><span>URL</span><input name="url" type="url" required placeholder="https://..."></label>
-          <label>
+        <div class="form-row">
+          <label class="field"><span>Ad</span><input name="name" required pattern="[a-z0-9][a-z0-9_\-]{1,49}" placeholder="ornek-provider"></label>
+          <label class="field grow"><span>URL</span><input name="url" type="url" required placeholder="https://..."></label>
+          <label class="field">
             <span>Format</span>
             <select name="format">
               <option value="auto">Otomatik algıla</option>
@@ -177,11 +182,27 @@
     </section>
   </main>
 
-  <dialog id="detail">
-    <form method="dialog">
-      <h2 id="detail-title"></h2>
-      <dl id="detail-body"></dl>
-      <button class="secondary">Kapat</button>
+  <dialog id="detail" aria-labelledby="detail-title">
+    <form method="dialog" class="detail">
+      <header class="detail-head">
+        <div id="detail-kicker" class="detail-kicker"></div>
+        <h2 id="detail-title"></h2>
+        <p id="detail-meta" class="muted"></p>
+        <button class="icon-close secondary" aria-label="Kapat">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </header>
+      <div id="detail-metrics" class="metric-tiles"></div>
+      <section class="score-card">
+        <div class="score-card-head">
+          <h3>Skor nasıl hesaplandı?</h3>
+          <span id="detail-final" class="score-final"></span>
+        </div>
+        <div id="detail-bar" class="stack-bar" aria-hidden="true"></div>
+        <dl id="detail-breakdown" class="breakdown"></dl>
+        <p id="detail-formula" class="formula muted"></p>
+      </section>
+      <div id="detail-tags" class="tags"></div>
     </form>
   </dialog>
 
