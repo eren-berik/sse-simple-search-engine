@@ -328,7 +328,7 @@ dialog {
   background: var(--surface);
   color: var(--text);
   padding: 0;
-  max-width: 560px;
+  max-width: 620px;
   width: calc(100% - 32px);
   box-shadow: var(--shadow-lg);
 }
@@ -363,13 +363,47 @@ dialog::backdrop { background: rgb(10 12 20 / 45%); backdrop-filter: blur(3px); 
 .score-card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px; }
 .score-card h3 { margin: 0; font-size: 14px; }
 .score-final { font-size: 24px; font-weight: 750; font-variant-numeric: tabular-nums; }
-.stack-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--border); margin-bottom: 12px; }
+.stack-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--border); margin-bottom: 14px; }
 .stack-bar span { height: 100%; }
-.breakdown { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; margin: 0; font-size: 13.5px; }
-.breakdown dt { display: flex; align-items: center; gap: 8px; color: var(--muted); }
-.breakdown dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
-.formula { margin: 12px 0 0; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+/* One block per score component: how it was calculated, step by step. */
+.explain { display: flex; flex-direction: column; gap: 10px; }
+.explain-block { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.explain-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.explain-head h4 { margin: 0; font-size: 13.5px; flex: 1; }
+.explain-head strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.calc-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 72px;
+  gap: 12px;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: 13px;
+  border-top: 1px dashed var(--border);
+}
+.calc-row:first-of-type { border-top: none; }
+.calc-label { color: var(--muted); }
+.calc-expr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+.calc-val { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.calc-row.sum { border-top: 1px solid var(--border); }
+.calc-row.sum .calc-label, .calc-row.sum .calc-val { color: var(--text); font-weight: 650; }
+.calc-note { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.tiers { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 8px; }
+.tier { padding: 3px 9px; border-radius: 8px; border: 1px solid var(--border); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tier.matched { border-color: var(--good); background: var(--good-soft); color: var(--good); font-weight: 600; }
+.explain-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13.5px;
+}
+.explain-total .calc-expr { white-space: normal; }
+.explain-total strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* ---------------------------------------------------------------- providers */
@@ -443,6 +477,10 @@ button.danger { color: var(--error-text); }
   .item .score { grid-column: 3; }
   .item .metrics { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric-tiles { grid-template-columns: repeat(2, 1fr); }
+  /* The calculation goes under its label so long expressions never overlap it. */
+  .calc-row { grid-template-columns: minmax(0, 1fr) auto; row-gap: 2px; }
+  .calc-row .calc-expr { grid-column: 1; grid-row: 2; white-space: normal; }
+  .detail { padding: 20px 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

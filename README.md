@@ -249,7 +249,11 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüz (
 
   Dördüncü sütun, skor formülündeki etkileşim oranı. Sayılar 1 milyona kadar tam yazılıyor; Türkçe kısaltmadaki "B" (bin) "milyar" gibi okunabildiği için kısaltma sadece milyonun üstünde kullanılıyor.
 - **Filtreler:** Arama kutusu, tür için Tümü/Video/Metin seçimi, provider, sıralama ve sayfa boyutu. Sayfalama numaralı.
-- **Detay penceresi:** Metriklerin tam değerleri ve skorun nasıl hesaplandığı gösteriliyor: temel puan × katsayı, güncellik ve etkileşim renkli bir çubukta, altında da formülün sayılarla hali (`27 × 1,5 + 0 + 0,8 = 41,3`).
+- **Detay penceresi:** Metriklerin tam değerleri ve skorun nasıl hesaplandığı gösteriliyor. Üç bileşen renkli bir çubukta, her biri ayrıca kendi kartında adım adım hesaplanıyor. Örnek, "Clean Architecture in Go":
+  - **Temel puan × tür katsayısı:** okuma süresi 8, reaksiyon 450 ÷ 50 = 9; temel puan 8 + 9 = 17; katsayı 17 × 1 = 17.
+  - **Güncellik:** kademeler (≤ 7 gün +5, ≤ 30 gün +3, ≤ 90 gün +1, daha eski 0); içeriğin düştüğü kademe vurgulanıyor ve yaşı (gün) yazıyor.
+  - **Etkileşim:** reaksiyon ÷ okuma süresi = 450 ÷ 8 = 56,25; çarpanla 56,25 × 5 = 281,25.
+  - **Toplam:** 17 + 0 + 281,25 = 298,25.
 
 ### Dashboard'da oturum
 
@@ -375,6 +379,11 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 - Güncellik puanı zamana bağlı olduğu için her sync'te, provider'ların artık döndürmediği kayıtların skorları da yeniden hesaplanır.
 - Sıfıra bölme korunur.
 - `GET /api/v1/contents/{id}` skor kırılımını döndürür. Dashboard'da bir satıra tıklayınca görünür.
+- Kırılımın `explanation` alanı her bileşenin nasıl hesaplandığını adım adım verir:
+  - temel puanı oluşturan terimler (metrik ÷ sabit = sonuç),
+  - etkileşim oranının pay, payda ve çarpanı,
+  - içeriğin yaşı, güncellik kademeleri ve hangisine düştüğü.
+- Formül tek bir kural tablosunda tanımlı. Skoru hesaplayan kod açıklamayı da aynı adımlarda üretiyor; bu yüzden gösterilen hesap, gerçek hesapla hiçbir zaman ayrışamaz. Sabitler arayüzde tekrar yazılmıyor.
 
 Örnek: provider1/v1 → `(15 + 12) × 1.5 + 0 + (1200/15000) × 10 = 41.3`
 
