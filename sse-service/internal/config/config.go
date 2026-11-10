@@ -19,6 +19,8 @@ type Config struct {
 	// RedisURL is optional; without it an in-process cache is used.
 	RedisURL string        `env:"REDIS_URL"`
 	CacheTTL time.Duration `env:"CACHE_TTL" envDefault:"90s"`
+	// CacheWarm refills the cache for the default searches whenever it is invalidated.
+	CacheWarm bool `env:"CACHE_WARM" envDefault:"true"`
 
 	ProviderTimeout    time.Duration `env:"PROVIDER_TIMEOUT" envDefault:"5s"`
 	ProviderRatePerSec float64       `env:"PROVIDER_RATE_PER_SEC" envDefault:"2"`

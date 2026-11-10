@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/config"
+	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/domain"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/handler"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/http/router"
 	"github.com/eren-berik/sse-simple-search-engine/sse-service/internal/ingest"
@@ -59,6 +60,9 @@ func boot(ctx context.Context, cfg config.Config, log *slog.Logger) (*applicatio
 	providerRepo := postgres.NewProviderRepository(pool)
 	scorer := newScorer(cfg)
 	searchSvc := search.NewService(contentRepo, searchCache, cfg.CacheTTL, scorer, log)
+	if cfg.CacheWarm {
+		searchSvc.WithWarmQueries(warmQueries())
+	}
 	providerRegistry := newProviderRegistry(cfg, log)
 
 	reg := metrics.NewRegistry()
@@ -167,4 +171,17 @@ func newVerifier(keys jwtauth.KeySource, cfg config.Config, rdb *redis.Client, l
 		v.WithRevocations(jwtauth.NewSessionRevocations(rdb, log))
 	}
 	return v
+}
+
+// warmQueries are the searches made without any input: the first page of every type, sorted by
+// popularity, at the dashboard's page size (10) and the API's default (20). They are what users
+// see first, so they are kept cached across syncs.
+func warmQueries() []domain.SearchQuery {
+	var qs []domain.SearchQuery
+	for _, perPage := range []int{10, domain.DefaultPerPage} {
+		for _, t := range []domain.ContentType{"", domain.ContentTypeVideo, domain.ContentTypeText} {
+			qs = append(qs, domain.SearchQuery{Type: t, Page: 1, PerPage: perPage})
+		}
+	}
+	return qs
 }

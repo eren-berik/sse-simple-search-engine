@@ -452,6 +452,10 @@ Tam şema için [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi
   - Provider verisi aynı kaldıkça cache sync'ler arasında korunur; önceden her 10 dakikada bir sıfırlanıyordu.
   - Gereksiz yazma ve onun bıraktığı ölü satırlar da oluşmaz.
   - Sync geçmişindeki `upserted` sayısı artık "eklenen ya da değişen" kayıtları gösterir; dashboard "4 kayıt · değişiklik yok" ya da "4 kayıt · 1 değişiklik" şeklinde yazar.
+- **Ön ısıtma (cache warming):** Cache her geçersizleştiğinde, kullanıcının hiçbir şey yazmadan gördüğü sorgular hemen yeniden hesaplanıp cache'e yazılır. Bunlar her türün (tümü, video, metin) popülerliğe göre ilk sayfası; hem dashboard'un sayfa boyutuyla (10) hem API'nin varsayılanıyla (20), toplam 6 sorgu.
+  - Böylece sync'ten sonra dashboard'u açan ilk kullanıcılar da cache'ten yanıt alır. Ön ısıtma birkaç milisaniye sürer, 5 sn ile sınırlıdır ve başarısız olursa yalnızca loglanır.
+  - Kullanıcı araması sayılmaz, bu yüzden `search_requests_total` metriğini etkilemez.
+  - `CACHE_WARM=false` ile kapatılabilir.
 - **Stampede koruması:** Aynı key için eşzamanlı cache miss'ler `singleflight` ile tek bir DB sorgusuna indirgenir.
 - **Graceful degradation:**
   - Redis yoksa aramalar doğrudan DB'den karşılanır (`BYPASS`).
@@ -583,6 +587,7 @@ Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metrikler
 | `JWKS_URL` | *(zorunlu)* | iam-service'in public key adresi |
 | `JWT_ISSUER` / `JWT_AUDIENCE` | `iam-service` / `sse` | iam-service ile aynı olmalı |
 | `REDIS_URL` / `CACHE_TTL` | boş / `90s` | |
+| `CACHE_WARM` | `true` | Cache geçersizleşince varsayılan aramaları önceden hesapla |
 | `SYNC_INTERVAL` | `10m` | Periyodik senkronizasyon aralığı |
 | `PROVIDER_RATE_PER_SEC` / `PROVIDER_BURST` | `2` / `1` | Provider başına istek limiti |
 | `PROVIDER_MAX_RETRIES` / `PROVIDER_TIMEOUT` | `3` / `5s` | |
