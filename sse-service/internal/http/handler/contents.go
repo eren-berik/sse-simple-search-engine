@@ -105,14 +105,23 @@ func (h *ContentHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	breakdown = scoring.Breakdown{
-		Base:            round(breakdown.Base, 4),
-		TypeCoefficient: breakdown.TypeCoefficient,
-		Recency:         breakdown.Recency,
-		Engagement:      round(breakdown.Engagement, 4),
-		Final:           round(breakdown.Final, 2),
+	return httpx.OK(c, contentDetailDTO{contentDTO: toDTO(content), ScoreBreakdown: roundBreakdown(breakdown)}, nil)
+}
+
+// roundBreakdown trims floating-point noise (0.0800000001) from the score and every step of
+// its explanation, keeping the explanation intact.
+func roundBreakdown(b scoring.Breakdown) scoring.Breakdown {
+	b.Base = round(b.Base, 4)
+	b.Engagement = round(b.Engagement, 4)
+	b.Final = round(b.Final, 2)
+	terms := make([]scoring.BaseTerm, len(b.Explanation.BaseTerms))
+	for i, t := range b.Explanation.BaseTerms {
+		t.Result = round(t.Result, 4)
+		terms[i] = t
 	}
-	return httpx.OK(c, contentDetailDTO{contentDTO: toDTO(content), ScoreBreakdown: breakdown}, nil)
+	b.Explanation.BaseTerms = terms
+	b.Explanation.Engagement.Result = round(b.Explanation.Engagement.Result, 4)
+	return b
 }
 
 func toDTO(c domain.Content) contentDTO {

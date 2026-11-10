@@ -494,6 +494,45 @@ components:
                 recency: { type: number }
                 engagement: { type: number }
                 final: { type: number }
+                explanation:
+                  type: object
+                  description: |
+                    How each component was derived, produced by the same code that computes the score.
+                    `base` is the sum of `base_terms[].result`; `final = base * type_coefficient + recency + engagement`.
+                  properties:
+                    base_terms:
+                      type: array
+                      items:
+                        type: object
+                        description: '`value / divisor = result` for one metric'
+                        properties:
+                          metric: { type: string, example: views }
+                          value: { type: number, example: 15000 }
+                          divisor: { type: number, example: 1000 }
+                          result: { type: number, example: 15 }
+                    engagement:
+                      type: object
+                      description: '`(numerator_value / denominator_value) * multiplier = result`; 0 when the denominator is 0'
+                      properties:
+                        numerator: { type: string, example: likes }
+                        numerator_value: { type: number, example: 1200 }
+                        denominator: { type: string, example: views }
+                        denominator_value: { type: number, example: 15000 }
+                        multiplier: { type: number, example: 10 }
+                        result: { type: number, example: 0.8 }
+                    recency:
+                      type: object
+                      properties:
+                        age_days: { type: number, example: 971 }
+                        tiers:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              max_age_days: { type: number, example: 7 }
+                              points: { type: number, example: 5 }
+                        matched_tier: { type: integer, description: 'Index into tiers; -1 when older than every tier', example: -1 }
+                        points: { type: number, example: 0 }
 
     ListMeta:
       type: object

@@ -483,12 +483,96 @@
     }
   }
 
-  // Score parts in the order of the formula: base × coefficient + recency + engagement.
-  const scoreParts = [
-    { key: "weighted", label: "Temel puan × tür katsayısı", color: "#6366f1" },
-    { key: "recency", label: "Güncellik", color: "#06b6d4" },
-    { key: "engagement", label: "Etkileşim", color: "#10b981" },
-  ];
+  // Score components in the order of the formula: base × coefficient + recency + engagement.
+  const scoreColors = { weighted: "#6366f1", recency: "#06b6d4", engagement: "#10b981" };
+  const metricNames = {
+    views: "Görüntülenme", likes: "Beğeni", reading_time: "Okuma süresi", reactions: "Reaksiyon", comments: "Yorum",
+  };
+  const n = (v) => fmtNumber.format(v);
+
+  function calcRow(label, expr, value, className = "") {
+    const row = el("div", `calc-row ${className}`.trim());
+    row.append(el("span", "calc-label", label), el("span", "calc-expr", expr), el("span", "calc-val", n(value)));
+    return row;
+  }
+
+  function explainBlock(color, title, value) {
+    const block = el("section", "explain-block");
+    const head = el("div", "explain-head");
+    const swatch = el("span", "swatch");
+    swatch.style.background = color;
+    head.append(swatch, el("h4", "", title), el("strong", "", n(value)));
+    block.append(head);
+    return block;
+  }
+
+  // renderScoreExplanation shows how every component was derived. The steps come from the
+  // API, which builds them with the same code that computes the score.
+  function renderScoreExplanation(c) {
+    const b = c.score_breakdown;
+    const x = b.explanation;
+    const weighted = b.base * b.type_coefficient;
+    const parts = [
+      ["weighted", weighted, "Temel puan × tür katsayısı"],
+      ["recency", b.recency, "Güncellik"],
+      ["engagement", b.engagement, "Etkileşim"],
+    ];
+
+    const bar = $("detail-bar");
+    bar.replaceChildren();
+    for (const [key, value, label] of parts) {
+      if (b.final <= 0 || value <= 0) continue;
+      const seg = el("span");
+      seg.style.width = `${(value / b.final) * 100}%`;
+      seg.style.background = scoreColors[key];
+      seg.title = `${label}: ${n(value)}`;
+      bar.append(seg);
+    }
+
+    // Base: each metric divided by its constant, summed, then weighted by the type coefficient.
+    const base = explainBlock(scoreColors.weighted, "Temel puan × tür katsayısı", weighted);
+    for (const t of x.base_terms) {
+      const name = metricNames[t.metric] || t.metric;
+      base.append(calcRow(name, t.divisor === 1 ? n(t.value) : `${n(t.value)} ÷ ${n(t.divisor)}`, t.result));
+    }
+    base.append(calcRow("Temel puan", x.base_terms.map((t) => n(t.result)).join(" + "), b.base, "sum"));
+    base.append(calcRow(`Tür katsayısı (${typeLabels[c.type] || c.type})`, `${n(b.base)} × ${n(b.type_coefficient)}`, weighted, "sum"));
+
+    // Recency: which age tier the content falls into.
+    const r = x.recency;
+    const recency = explainBlock(scoreColors.recency, "Güncellik", b.recency);
+    const tiers = el("div", "tiers");
+    r.tiers.forEach((t, i) => {
+      const tier = el("span", `tier ${i === r.matched_tier ? "matched" : ""}`.trim(), `≤ ${n(t.max_age_days)} gün: +${n(t.points)}`);
+      tiers.append(tier);
+    });
+    tiers.append(el("span", `tier ${r.matched_tier < 0 ? "matched" : ""}`.trim(), "Daha eski: 0"));
+    recency.append(tiers);
+    const ageText = r.age_days === 0 ? "bugün" : `${n(r.age_days)} gün önce`;
+    recency.append(calcRow("İçerik yaşı", `${fmtDate.format(new Date(c.published_at))} · ${ageText}`, b.recency, "sum"));
+
+    // Engagement: a ratio of two metrics times a constant.
+    const e = x.engagement;
+    const engagement = explainBlock(scoreColors.engagement, "Etkileşim", b.engagement);
+    const num = metricNames[e.numerator] || e.numerator;
+    const den = metricNames[e.denominator] || e.denominator;
+    if (e.denominator_value > 0) {
+      const ratio = e.numerator_value / e.denominator_value;
+      engagement.append(calcRow(`${num} ÷ ${den}`, `${n(e.numerator_value)} ÷ ${n(e.denominator_value)}`, ratio));
+      engagement.append(calcRow("Çarpan", `${n(ratio)} × ${n(e.multiplier)}`, e.result, "sum"));
+    } else {
+      engagement.append(calcRow(`${num} ÷ ${den}`, `${n(e.numerator_value)} ÷ 0`, 0, "sum"));
+      engagement.append(el("p", "calc-note", `${den} 0 olduğu için etkileşim puanı 0 sayılır.`));
+    }
+
+    $("detail-breakdown").replaceChildren(base, recency, engagement);
+
+    const total = $("detail-total");
+    total.replaceChildren(
+      el("span", "calc-expr", `${n(weighted)} + ${n(b.recency)} + ${n(b.engagement)}`),
+      el("strong", "", `= ${n(b.final)}`),
+    );
+  }
 
   async function openDetail(id) {
     const epoch = authEpoch;
@@ -511,28 +595,7 @@
       }
 
       $("detail-final").textContent = fmtNumber.format(b.final);
-      const parts = { weighted: b.base * b.type_coefficient, recency: b.recency, engagement: b.engagement };
-      const bar = $("detail-bar");
-      const list = $("detail-breakdown");
-      bar.replaceChildren();
-      list.replaceChildren();
-      for (const part of scoreParts) {
-        const value = parts[part.key];
-        if (b.final > 0 && value > 0) {
-          const seg = el("span");
-          seg.style.width = `${(value / b.final) * 100}%`;
-          seg.style.background = part.color;
-          seg.title = `${part.label}: ${fmtNumber.format(value)}`;
-          bar.append(seg);
-        }
-        const dt = el("dt");
-        const swatch = el("span", "swatch");
-        swatch.style.background = part.color;
-        dt.append(swatch, part.label);
-        list.append(dt, el("dd", "", fmtNumber.format(value)));
-      }
-      $("detail-formula").textContent =
-        `${fmtNumber.format(b.base)} × ${fmtNumber.format(b.type_coefficient)} + ${fmtNumber.format(b.recency)} + ${fmtNumber.format(b.engagement)} = ${fmtNumber.format(b.final)}`;
+      renderScoreExplanation(c);
 
       const tags = $("detail-tags");
       tags.replaceChildren(...c.tags.map((t) => el("span", "chip", t)));
