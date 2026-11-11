@@ -121,7 +121,7 @@ PostgreSQL host'ta **5433** portundan açılır, böylece lokalde çalışan bir
 ## İçindekiler
 
 - [Kurulum ve Çalıştırma](#kurulum-ve-çalıştırma)
-- [Genel Bakış](#genel-bakış)
+- [Genel Bakış](#genel-bakış) · [Teknoloji seçimleri](#teknoloji-seçimleri-ve-gerekçeleri)
 - [Mimari](#mimari)
 - [Akışlar](#akışlar)
 - [Veri Modeli](#veri-modeli)
@@ -136,7 +136,7 @@ PostgreSQL host'ta **5433** portundan açılır, böylece lokalde çalışan bir
 - [İzleme (Monitoring)](#izleme-monitoring)
 - [Testler](#testler)
 - [Konfigürasyon](#konfigürasyon)
-- [Teknoloji Tercihleri ve Gerekçeleri](#teknoloji-tercihleri-ve-gerekçeleri)
+- [Teknoloji Ayrıntıları](#teknoloji-ayrıntıları)
 - [Ölçeklenme Planı](#ölçeklenme-planı)
 - [Bilinen Sınırlamalar ve Geliştirme Fikirleri](#bilinen-sınırlamalar-ve-geliştirme-fikirleri)
 
@@ -154,11 +154,71 @@ Farklı formatlardaki (JSON, XML) içerik sağlayıcılardan veri toplayan, bu v
 | **iam-service** | Kullanıcılar, şifreler, roller, access/refresh token'lar, oturum iptali |
 | **sse-service** | Asıl iş mantığı: provider entegrasyonu, puanlama, arama, cache, senkronizasyon |
 
-- **Dil / framework:** Go 1.26, Fiber v2
-- **Veritabanı:** PostgreSQL 16; her servisin kendi veritabanı var
-- **Cache ve paylaşılan durum:** Redis 7 (opsiyonel; yoksa servisler bellek içi çalışır)
-- **Kimlik doğrulama:** JWT (RS256) access token, JWKS ile dağıtılan public key, rotasyonlu refresh token
-- **İzleme:** Prometheus + Grafana, hazır dashboard'larla
+### Teknoloji seçimleri ve gerekçeleri
+
+| Alan | Seçim | Neden |
+|---|---|---|
+| Dil | **Go 1.26** | En iyi bildiğim dil; ayrıca işin yapısına uyuyor |
+| HTTP framework | **Fiber v2** | Rate limiter, request-id, recover ve reverse proxy hazır geliyor |
+| Veritabanı | **PostgreSQL 16** | Tutarlı kayıt ve arama tek sistemde; her servisin kendi veritabanı var. Arama hacmi çok büyürse yanına Elasticsearch eklenir |
+| Cache ve paylaşılan durum | **Redis 7** | Instance'lar arasında paylaşılan cache, rate limit ve oturum iptali; opsiyonel |
+| Mimari | **Gateway + 2 servis** | Bu boyut için gereğinden fazla; ölçeklenebilirlik için bilinçli tercih |
+| Kimlik doğrulama | **JWT (RS256) + JWKS** | Servisler token'ı ağ çağrısı yapmadan doğrular; refresh token'lar rotasyonlu |
+| İzleme | **Prometheus + Grafana** | Açık kaynak standardı; dashboard'lar kodla birlikte gelir |
+
+#### Go
+Asıl neden know-how: Go en hızlı ve en güvenle yazabildiğim dil. Süresi kısıtlı bir case'te dili öğrenmeye değil, tasarıma ve teste zaman ayırmak önemliydi. Bunun dışında Go işin yapısına da uyuyor:
+- **Eşzamanlılık:** Provider'lar goroutine'lerle paralel çekiliyor. `context` ile timeout ve iptal her katmanda aynı şekilde işliyor.
+- **Tek statik binary:** Her servis küçük bir distroless imaja giriyor; çalışma zamanı bağımlılığı yok.
+- **Standart kütüphane:** Yapısal log (`log/slog`), HTTP test araçları (`httptest`) ve `embed` (migration'lar ve dashboard binary'nin içinde) dışarıdan paket gerektirmiyor.
+
+#### PostgreSQL
+Veri ilişkisel ve şeması sabit: farklı formatlar mapper katmanında tek bir standart formata dönüştürülüyor. Projenin ihtiyaçlarının hepsi tek bir veritabanında karşılanıyor:
+- **Tutarlılık:** Bir provider'ın kayıtları tek transaction'da yazılıyor. `(provider, external_id)` tekilliği, `CHECK` kısıtları ve foreign key'ler veritabanı seviyesinde korunuyor.
+- **Arama:** Tam kelime araması ve ağırlıklı alakalılık (`tsvector` + `ts_rank`), kelime parçası araması (`pg_trgm`) ve etiket filtresi (GIN index) için ayrı bir arama motoru gerekmiyor.
+- **Hızlı sıralama:** Skor yazılırken hesaplanıp index'leniyor; popülerlik sıralaması index'ten okunuyor.
+- **Tek kaynak:** Veri ile arama index'i aynı yerde olduğu için ikisini senkron tutma derdi yok.
+
+Ölçüldü: 1 milyon kayıtta aramaların çoğu 0,3 saniye ya da altında. En kötü durum, kayıtların %28'inde geçen bir kelimede alakalılık sıralaması: 1. sayfa ~0,7 sn, 2. sayfa ~0,8 sn (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)).
+
+**Neden MongoDB değil:** Şema esnekliği burada belirleyici değil, çünkü formatlar zaten normalize ediliyor. Mongo'nun metin araması koleksiyon başına tek index'le sınırlı ve kelime parçası araması yapamıyor. Bir provider'ın kayıtlarını tek seferde yazmak için gereken çok dokümanlı transaction'lar da replica set istiyor.
+
+#### Redis
+Bellek içi bir cache tek instance'ta yeterdi, ama her instance kendi kopyasını tutar ve birbirinden habersiz olurdu. Redis şunları bütün instance'lar arasında ortak tutuyor:
+- **Arama cache'i:** Cache'i geçersiz kılmak tek bir atomik `INCR` ile yapılıyor (bkz. [Cache Stratejisi](#cache-stratejisi)).
+- **Rate limit sayaçları:** Bir kullanıcının limiti hangi gateway instance'ına giderse gitsin aynı.
+- **İptal edilmiş oturumlar:** Logout bütün servislerde anında etkili oluyor.
+
+Redis opsiyonel: ulaşılamazsa servisler bellek içi çalışmaya ve veritabanından okumaya devam eder; sistem durmaz.
+
+#### Mikroservis mimarisi
+Dürüst olmak gerekirse bu case'in boyutu için tek bir servis (monolit) yeterdi. Üç servis bilinçli bir tercih: sistemin büyüdüğünde nasıl ayrışacağını baştan göstermek.
+
+Kazanılanlar:
+- **Güvenlik:** Token imzalama anahtarı yalnızca iam-service'te duruyor; diğer servisler sadece public key'i görüyor.
+- **Bağımsız ölçekleme:** Arama yükü artınca yalnızca sse-service çoğaltılıyor.
+- **Edge görevleri tek yerde:** Token doğrulama, rate limit, circuit breaker ve retry gateway'de; servisler iş mantığına odaklanıyor.
+- **Bağımsız geliştirme ve deploy:** Her servis ayrı bir Go modülü, kendi veritabanı ve kendi imajıyla geliyor.
+
+Ödenen bedel:
+- **Daha fazla parça:** Üç modül, üç imaj, daha fazla konfigürasyon.
+- **Kod tekrarı:** Ortak kütüphane modülü olmadığı için küçük yardımcıların her serviste bir kopyası var.
+- **Ağ maliyeti:** Her istekte servisler arasında bir ağ çağrısı yapılıyor; bunun riski circuit breaker ve retry ile yönetiliyor.
+
+Daha küçük bir ekip için orta yol, aynı sınırları tek bir binary içinde koruyan bir "modüler monolit" olurdu.
+
+#### Elasticsearch ne zaman tercih edilir
+PostgreSQL'in sınırı alakalılık sıralamasında: index eşleşen satırları hızlı bulur, ama "en alakalı 20"yi doğrudan veremez. Alakalılık her eşleşme için ayrı hesaplanıp sıralanır, yani süre eşleşme sayısıyla doğrusal büyür. 1 milyon kayıtta çok yaygın bir kelime ~0,7 sn sürüyor; 10 milyon kayıtta ~5–7 sn olacağı tahmin ediliyor.
+
+Elasticsearch (ya da OpenSearch) şu durumlarda tercih edilmeli:
+- **Hacim:** Kayıt sayısı ~10 milyonu geçtiğinde ya da yaygın kelimelerde arama süresi kabul edilemez hale geldiğinde. ES "en iyi k sonuç"u bütün eşleşmeleri puanlamadan bulur (BM25 + block-max WAND).
+- **Dil özellikleri:** Kök bulma ("program" ↔ "programming"), yazım hatası toleransı, eş anlamlılar.
+- **Facet'ler:** "Bu aramada kaç video, kaç metin, hangi etiketten kaç tane" gibi canlı sayımlar.
+- **Yatay ölçek:** İndeks birden fazla makineye bölünebilir.
+
+Geçiş planı: PostgreSQL kaynak veri olarak kalır, Elasticsearch yalnızca arama için bir kopya (read model) olur ve sync her yazmadan sonra onu da günceller. Arama zaten bir arayüzün (`ContentSearcher`) arkasında olduğu için API ve servis katmanı değişmez. Bedeli ikinci bir sistemi işletmek ve iki kopyanın kısa süre farklı olabilmesi (eventual consistency). Bu yüzden önce daha ucuz adımlar denenmeli: sayımı sınırlamak, keyset sayfalama, alakalılığı en popüler adaylar içinde hesaplamak (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)).
+
+Uygulama ayrıntıları (kullanılan kütüphaneler, PostgreSQL'in hangi ihtiyacı nasıl karşıladığı) için: [Teknoloji Ayrıntıları](#teknoloji-ayrıntıları).
 
 ---
 
@@ -1135,20 +1195,16 @@ Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metrikler
 
 ---
 
-## Teknoloji Tercihleri ve Gerekçeleri
+## Teknoloji Ayrıntıları
 
-### Go + Fiber
-- **Go:** Eşzamanlılık modeli provider'ları paralel çekmeye uygun. Tek statik binary üretmesi de servis başına küçük bir distroless imaj demek.
-- **Fiber:** fasthttp üzerinde çalışıyor ve gereken parçaları hazır getiriyor: rate limiter, request-id, recover, reverse proxy.
+Seçimlerin gerekçeleri [Genel Bakış](#teknoloji-seçimleri-ve-gerekçeleri) bölümünde; burada nasıl kullanıldıkları var.
+
+### Fiber ve gateway
+- **fasthttp tabanlı:** Gereken parçalar hazır geliyor: rate limiter, request-id, recover, reverse proxy.
 - **`Immutable: true`:** fasthttp request buffer'larını yeniden kullandığı için açık. Böylece handler'dan dışarı çıkan string'ler güvenli kalıyor (cache anahtarları, singleflight, proxy).
+- **Tek giriş noktası:** Gateway sayesinde istemci tek bir origin görüyor; CORS gerekmiyor.
 
-### Neden üç servis
-Kimlik yönetimi ile içerik araması farklı hızlarda değişen, farklı güvenlik gereksinimleri olan iki alan:
-- **Private key izolasyonu:** İmzalama anahtarı yalnızca iam-service'te kalıyor.
-- **Bağımsız ölçekleme:** Arama yükü arttığında yalnızca sse-service ölçeklenebiliyor.
-- **Tek giriş noktası:** Gateway sayesinde istemci tek bir origin görüyor (CORS gerekmiyor). Token doğrulama, rate limit ve circuit breaker gibi edge görevleri de tek yerde toplanıyor.
-
-### PostgreSQL (MongoDB ve Elasticsearch yerine)
+### PostgreSQL'in karşıladığı ihtiyaçlar
 
 | İhtiyaç | PostgreSQL ile karşılanma şekli |
 |---|---|
@@ -1161,17 +1217,14 @@ Kimlik yönetimi ile içerik araması farklı hızlarda değişen, farklı güve
 | Tarih filtresi | `published_at` B-tree index |
 | Token rotasyonu | Tek bir koşullu `UPDATE` ile atomik "tüket" işlemi |
 
-- **MongoDB:** Formatlar arası farklar zaten mapper katmanında normalize ediliyor, bu yüzden şema esnekliği belirleyici değil. Ayrıca Mongo'nun text search'ü koleksiyon başına tek index'le sınırlı ve kısmi eşleşme yapamıyor. Çok dokümanlı transaction için de replica set gerekiyor.
-- **Elasticsearch:** Bu veri hacminde Postgres FTS yeterli. Veri milyonlara çıkarsa ES bir read model olarak eklenebilir; Postgres kaynak veri olarak kalır, ES `ContentSearcher` interface'inin arkasına yerleşir ve servis katmanı değişmez (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)).
-
-### Redis
-- **sse-service:** Arama sonuçlarının paylaşımlı cache'i.
+### Redis'in kullanıldığı yerler
+- **sse-service:** Arama sonuçlarının ve etiket listesinin paylaşımlı cache'i.
 - **Gateway:** Instance'lar arasında paylaşılan rate limit sayaçları.
 - **Üç servis:** İptal edilmiş oturumlar listesi.
 
-Redis hepsi için opsiyoneldir; ulaşılamazsa sistem çalışmaya devam eder (bkz. [Cache Stratejisi](#cache-stratejisi)).
+Anahtarların listesi: [Redis anahtarları](#redis-anahtarları).
 
-### Diğer
+### Kütüphaneler
 - `pgx/v5`: PostgreSQL driver'ı.
 - `goose`: Migration'lar binary'ye gömülü, açılışta otomatik uygulanır.
 - `golang-jwt/jwt/v5`: Token imzalama ve doğrulama.
