@@ -42,5 +42,6 @@ CREATE INDEX ON bench.contents USING GIN (title gin_trgm_ops);
 CREATE INDEX ON bench.contents (score DESC, id);
 CREATE INDEX ON bench.contents (type, score DESC, id);
 CREATE INDEX ON bench.contents USING GIN (tags);
+CREATE INDEX ON bench.contents (published_at);
 ALTER TABLE bench.contents ADD PRIMARY KEY (id);
 VACUUM ANALYZE bench.contents;
