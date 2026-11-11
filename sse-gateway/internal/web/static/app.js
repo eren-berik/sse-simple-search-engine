@@ -313,11 +313,7 @@
     $("user-menu").hidden = !open;
     $("user-menu-btn").setAttribute("aria-expanded", String(open));
   }
-  $("user-menu-btn").addEventListener("click", () => {
-    const open = $("user-menu").hidden;
-    setUserMenu(open);
-    if (open) $("logout-btn").focus();
-  });
+  $("user-menu-btn").addEventListener("click", () => setUserMenu($("user-menu").hidden));
   document.addEventListener("click", (e) => {
     if (!$("user-box").contains(e.target)) setUserMenu(false);
   });
