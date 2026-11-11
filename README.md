@@ -295,7 +295,7 @@ Kimlik yönetimi ile içerik araması farklı hızlarda değişen, farklı güve
 |---|---|
 | Kalıcı veri tutarlılığı | ACID transaction'lar; `UNIQUE (provider, external_id)`, `CHECK` ve `contents → providers` foreign key kısıtları. Provider batch'i tek transaction'da upsert edilir |
 | Anahtar kelime araması | Başlık (ağırlık A) ve etiketler (ağırlık B) üzerinde `tsvector` generated column + GIN index |
-| Alakalılık skoru | `ts_rank` ve `pg_trgm similarity` toplamı |
+| Alakalılık skoru | Tam kelime eşleşmesinde ağırlıklı `ts_rank`, kelime parçasında `pg_trgm word_similarity` |
 | Kısmi eşleşme ("kubern" → Kubernetes) | `pg_trgm` GIN index ile `ILIKE` |
 | Popülerliğe göre sıralama | Önceden hesaplanmış `score` kolonu + `(type, score DESC)` index'i |
 | Token rotasyonu | Tek bir koşullu `UPDATE` ile atomik "tüket" işlemi |
@@ -438,7 +438,12 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
   - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
 - **Sıralama:**
   - `popularity`: `score DESC`
-  - `relevance`: `ts_rank + similarity DESC`. Ham değer (ör. 0,7329) kullanıcıya bir şey ifade etmediği için yanıtta ayrıca `match` döner: alakalılığın, aramanın **en iyi sonucuna göre yüzdesi** (en iyisi 100).
+  - `relevance`: Yalnızca gerçek eşleşmeyi puanlar.
+    - **Tam kelime eşleşmesi:** Ağırlıklı `ts_rank` ile puanlanır; başlık 1,0, etiket 0,8. Başlıkta geçen kelime etikette geçenden, ikisinde birden geçen de tekinden daha yüksek puan alır. Örneğin "programming" araması: başlığında ve etiketinde geçen %100, yalnızca etiketinde geçen dört içerik eşit şekilde %67.
+    - **Kelimenin yalnızca bir parçası geçiyorsa** (ör. "kuberne"): `word_similarity` kullanılır, 0,4 ile ölçeklenir; böylece her zaman tam eşleşmelerin altında kalır.
+    - **Eşitlikte** popülerlik skoru belirler; aynı şekilde eşleşen içeriklerden daha değerli olan öne çıkar.
+    - **Neden başlık benzerliği eklenmiyor:** İlk sürümde `similarity(title, q)` de ekleniyordu. Bu kısa başlıkları ödüllendiriyor ve harf tesadüflerine puan veriyordu: "testing" ile "programming" ortak "ing" içerdiği için aynı şekilde eşleşen içerikler %21 ile %31 arasına saçılıyordu.
+  - Ham değer kullanıcıya bir şey ifade etmediği için yanıtta ayrıca `match` döner: alakalılığın, aramanın **en iyi sonucuna göre yüzdesi** (en iyisi 100).
     - Referans sayfa değil bütün aramadır (`max(relevance) OVER ()`): 2. sayfadaki bir sonuç da aynı ölçekte görünür.
     - Alakalılık sıralaması zaten bütün eşleşmeleri puanladığı için ek maliyeti yoktur. Popülerlik sıralamasında hesaplanmaz, böylece onun index planı korunur.
     - Mutlak bir ölçek (ör. `ts_rank` normalizasyonu) seçilmedi: başlığında tam aranan kelime geçen bir içerik bile ~%25 çıkıp "kötü eşleşme" gibi görünüyordu.

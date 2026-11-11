@@ -375,8 +375,10 @@ func TestRelevanceMatchIsRelativeToTheBestResult(t *testing.T) {
 	repo, _ := newTestRepo(t)
 	seed(t, repo)
 
-	all := search(t, repo, domain.SearchQuery{Keyword: "go", PerPage: 100})
-	require.NotEmpty(t, all.Hits)
+	// "programming" is in one title (and its tags) and in four other items' tags only.
+	all := search(t, repo, domain.SearchQuery{Keyword: "programming", PerPage: 100})
+	require.Len(t, all.Hits, 5)
+	assert.Equal(t, "Go Programming Tutorial", all.Hits[0].Content.Title)
 	assert.InDelta(t, 1.0, all.Hits[0].Match, 1e-9, "the best result is the reference")
 	for i, h := range all.Hits {
 		assert.InDelta(t, all.Hits[0].Relevance*h.Match, h.Relevance, 1e-9, "match = relevance / best")
@@ -386,11 +388,45 @@ func TestRelevanceMatchIsRelativeToTheBestResult(t *testing.T) {
 	}
 
 	// The reference is the whole search, not the page: page 2 does not start at 100%.
-	second := search(t, repo, domain.SearchQuery{Keyword: "go", Page: 2, PerPage: 2})
+	second := search(t, repo, domain.SearchQuery{Keyword: "programming", Page: 2, PerPage: 2})
 	require.NotEmpty(t, second.Hits)
 	assert.InDelta(t, all.Hits[2].Match, second.Hits[0].Match, 1e-9)
 	assert.Less(t, second.Hits[0].Match, 1.0)
 
-	popular := search(t, repo, domain.SearchQuery{Keyword: "go", Sort: domain.SortPopularity})
+	popular := search(t, repo, domain.SearchQuery{Keyword: "programming", Sort: domain.SortPopularity})
 	assert.Zero(t, popular.Hits[0].Match, "only relevance sorting computes it")
+}
+
+func TestRelevanceRewardsRealMatchesOnly(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+	matches := func(q string) map[string]float64 {
+		out := map[string]float64{}
+		for _, h := range search(t, repo, domain.SearchQuery{Keyword: q, PerPage: 100}).Hits {
+			out[h.Content.Title] = h.Match
+		}
+		return out
+	}
+
+	// Tag-only matches are equal, whatever letters their titles happen to share with the query,
+	// and rank below the title match but well above a third of it.
+	p := matches("programming")
+	tagOnly := p["Go Testing Best Practices"]
+	for _, title := range []string{"Clean Architecture in Go", "Advanced Go Concurrency Patterns", "Building RESTful APIs with Go"} {
+		assert.InDelta(t, tagOnly, p[title], 1e-9, title)
+	}
+	assert.Greater(t, tagOnly, 0.6)
+	assert.Less(t, tagOnly, 1.0)
+
+	// Same kind of match, same percentage; ties are ordered by popularity.
+	res := search(t, repo, domain.SearchQuery{Keyword: "go", PerPage: 100})
+	for _, h := range res.Hits {
+		assert.InDelta(t, 1.0, h.Match, 1e-9, h.Content.Title)
+	}
+	assert.Equal(t, "Clean Architecture in Go", res.Hits[0].Content.Title, "the most popular of equal matches comes first")
+
+	// A match on part of a word only still ranks below whole-word matches.
+	mixed := search(t, repo, domain.SearchQuery{Keyword: "test", PerPage: 100})
+	require.NotEmpty(t, mixed.Hits)
+	assert.Equal(t, "Go Testing Best Practices", mixed.Hits[0].Content.Title)
 }

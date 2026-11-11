@@ -151,9 +151,24 @@ func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.T
 	return updated, nil
 }
 
+// relevanceSQL scores how well a row matches @q, rewarding real matches only:
+//   - a whole-word match is ranked by ts_rank, with title words (A) weighted 1.0 and tags (B) 0.8,
+//     so a title match beats a tag match and a word in both beats either;
+//   - a match on part of a word only (found by ILIKE, e.g. "kuberne") gets word_similarity,
+//     scaled by 0.4 so it always stays below any whole-word match.
+//
+// Whole-title trigram similarity is deliberately not added: it rewarded short titles and letter
+// coincidences ("testing" shares "ing" with "programming"), which ranked equally good matches apart
+// for no reason. Equal matches are ordered by the popularity score instead.
+const relevanceSQL = `(CASE
+	WHEN search_vector @@ websearch_to_tsquery('simple', @q)
+		THEN ts_rank('{0.1, 0.2, 0.8, 1.0}', search_vector, websearch_to_tsquery('simple', @q))
+	ELSE 0.4 * word_similarity(@q, title)
+END)::float8`
+
 // Search returns a page of contents matching q.
 // Keyword matching combines full-text search on title and tags with a substring match on the title;
-// relevance is ts_rank plus trigram similarity of the title.
+// relevance is described at relevanceSQL.
 func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, error) {
 	args := pgx.NamedArgs{"limit": q.PerPage, "offset": q.Offset()}
 	// Contents of disabled providers stay stored but are hidden until the provider is enabled again.
@@ -164,7 +179,7 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		args["q"] = q.Keyword
 		args["like"] = "%" + escapeLike(q.Keyword) + "%"
 		conds = append(conds, `(search_vector @@ websearch_to_tsquery('simple', @q) OR title ILIKE @like)`)
-		relevance = `(ts_rank(search_vector, websearch_to_tsquery('simple', @q)) + similarity(title, @q))::float8`
+		relevance = relevanceSQL
 	}
 	if q.Type != "" {
 		args["type"] = string(q.Type)
