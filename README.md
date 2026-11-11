@@ -1,26 +1,127 @@
 # Content Search Service
 
-Farklı formatlardaki (JSON, XML) içerik sağlayıcılardan (provider) veri toplayan, bu verileri standart bir formata dönüştürüp ortak bir formülle puanlayan ve aranabilir hale getiren bir arama sistemi. Anahtar kelime araması; tür, provider, etiket ve tarih filtreleri; popülerlik ve alakalılık sıralaması ile sayfalama sunar. Kullanıcılar kayıt olup giriş yapar. **viewer** rolü içerikleri arar ve filtreler; **admin** ek olarak provider ekler, düzenler, siler ve senkronize eder.
+JSON ve XML içerik sağlayıcılarından (provider) veri toplayan, ortak bir formülle puanlayan ve aranabilir hale getiren bir arama sistemi: API, dashboard ve izleme dahil, Docker ile tek komutla ayağa kalkar.
 
-![İçerik listesi](docs/images/contents-popularity.png)
+---
 
-| Servis | Sorumluluk |
+## Kurulum ve Çalıştırma
+
+### Gereksinimler
+
+- **Docker** ve **Docker Compose v2**: Docker Desktop (macOS / Windows) ya da Docker Engine (Linux). Başka hiçbir şey kurmak gerekmez; Go, PostgreSQL ve Redis konteynerlerin içinde çalışır.
+- **git**: projeyi indirmek için.
+- *(Opsiyonel)* **make** ve **openssl**: kısa komutlar ve kalıcı imzalama anahtarı için. Yoksa her adımın `docker compose` karşılığı da aşağıda yazıyor.
+- Şu portlar boş olmalı: **8080** (uygulama), **5433** (PostgreSQL), **6379** (Redis), **9090** (Prometheus), **3000** (Grafana). Doluysa 2. adıma bakın.
+
+### Adım adım
+
+**1. Projeyi indirin**
+
+```bash
+git clone https://github.com/eren-berik/sse-simple-search-engine.git
+cd sse-simple-search-engine
+```
+
+**2. *(Opsiyonel)* Ayar dosyasını oluşturun**
+
+```bash
+cp .env.example .env
+```
+
+Varsayılanlarla çalışacaksanız bu adım gerekmez. Bir port bilgisayarınızda doluysa `.env` içinde değiştirin; örneğin `APP_PORT=18080` yazarsanız uygulama `http://localhost:18080` adresinde açılır.
+
+**3. *(Opsiyonel, önerilir)* Kalıcı imzalama anahtarı oluşturun**
+
+```bash
+make keys
+# make yoksa:
+# mkdir -p deploy/keys && openssl genrsa -out deploy/keys/jwt.pem 2048 && chmod 644 deploy/keys/jwt.pem
+```
+
+Sonra `.env` dosyasındaki `# JWT_PRIVATE_KEY_FILE=/keys/jwt.pem` satırının başındaki `#` işaretini silin (dosya yoksa 2. adımı yapın). Bu adım atlanırsa sistem yine çalışır; yalnızca iam-service her yeniden başladığında yeni bir anahtar üretir ve açık oturumlar bir kez yeniden giriş ister.
+
+**4. Sistemi başlatın**
+
+```bash
+make up          # make yoksa: docker compose up --build -d
+```
+
+İlk çalıştırmada üç servisin imajı derlenir ve PostgreSQL, Redis, Prometheus, Grafana imajları indirilir; bu birkaç dakika sürer (temiz bir kurulumda yaklaşık 2,5 dakika). Sonraki başlatmalar saniyeler içinde olur.
+
+**5. Hazır olduğunu kontrol edin**
+
+```bash
+curl http://localhost:8080/readyz
+```
+
+Yanıtta `"status":"ok"` görünüyorsa sistem hazırdır. Ayrıca bir şey yapmanız gerekmez: veritabanı tabloları açılışta otomatik kurulur ve iki provider'ın içerikleri otomatik çekilir. `"unavailable"` görüyorsanız birkaç saniye bekleyip tekrar deneyin.
+
+**6. Dashboard'u açın**
+
+1. Tarayıcıda http://localhost:8080 adresine gidin.
+2. **Kayıt ol** sekmesinde bir kullanıcı adı ve en az 8 karakterlik bir şifre girin.
+3. Yetki düzeyini seçin: **Admin** provider'ları da yönetebilir, **Viewer** yalnızca arar ve filtreler.
+4. **Kayıt ol**'a basın; içerik listesi açılır. Arama kutusuna örneğin `go` yazarak deneyebilirsiniz.
+
+| Adres | Ne var |
 |---|---|
-| **sse-gateway** | Tek giriş noktası. İstekleri sahibi olan servise yönlendirir. Middleware katmanında token doğrulama, rol kontrolü, kademeli rate limit, circuit breaker ve retry; ayrıca dashboard ve API dokümanı |
-| **iam-service** | Kullanıcılar, şifreler, roller, access/refresh token'lar, oturum iptali |
-| **sse-service** | Asıl iş mantığı: provider entegrasyonu, puanlama, arama, cache, senkronizasyon |
+| http://localhost:8080 | Dashboard |
+| http://localhost:8080/docs | API dokümanı (Swagger UI); endpoint'ler buradan denenebilir |
+| http://localhost:3000 | Grafana: hazır izleme dashboard'ları (giriş gerekmez; düzenlemek için `admin` / `admin`) |
+| http://localhost:9090 | Prometheus |
+| http://localhost:8080/readyz | Servislerin hazırlık durumu |
 
-- **Dil / framework:** Go 1.26, Fiber v2
-- **Veritabanı:** PostgreSQL 16; her servisin kendi veritabanı var
-- **Cache ve paylaşılan durum:** Redis 7 (opsiyonel; yoksa servisler bellek içi çalışır)
-- **Kimlik doğrulama:** JWT (RS256) access token, JWKS ile dağıtılan public key, rotasyonlu refresh token
-- **İzleme:** Prometheus + Grafana, hazır dashboard'larla
+**7. *(Opsiyonel)* API'yi komut satırından deneyin**
+
+```bash
+# Admin olarak kayıt olup token alın
+TOKEN=$(curl -s -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json' \
+  -d '{"username":"alice","password":"s3cret-pass","role":"admin"}' | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+
+curl -H "Authorization: Bearer $TOKEN" 'localhost:8080/api/v1/contents?q=go&type=video'      # arama
+curl -H "Authorization: Bearer $TOKEN" -X POST localhost:8080/api/v1/providers -H 'Content-Type: application/json' \
+  -d '{"name":"my-feed","url":"https://raw.githubusercontent.com/WEG-Technology/mock/refs/heads/main/v2/provider2"}'  # provider ekle (format otomatik algılanır)
+curl -H "Authorization: Bearer $TOKEN" -X POST localhost:8080/api/v1/sync                    # hepsini senkronize et
+```
+
+**8. Durdurun**
+
+```bash
+docker compose stop      # durdur; veriler kalır, "make up" ile kaldığı yerden devam eder
+make down                # durdur ve her şeyi sil (veritabanı dahil); make yoksa: docker compose down -v
+```
+
+### Sorun giderme
+
+| Belirti | Çözüm |
+|---|---|
+| `port is already allocated` / `address already in use` | O port başka bir programda. `.env` dosyasında ilgili portu değiştirin (`APP_PORT`, `POSTGRES_PORT`, `REDIS_PORT`, `PROMETHEUS_PORT`, `GRAFANA_PORT`) ve `make up`'ı tekrar çalıştırın |
+| `/readyz` uzun süre `unavailable` | Hangi servisin hazır olmadığı yanıtta yazar. Logları `docker compose logs -f <servis>` ile inceleyin (`sse-gateway`, `iam-service`, `sse-service`) |
+| Kayıt / girişte "Çok fazla istek" | Giriş ve kayıt IP başına dakikada 10 istekle sınırlı. 1 dakika bekleyin |
+| İçerik listesi boş | Provider'lar internetten çekilir; bilgisayarın internete erişimi olmalı. Admin olarak **Provider'lar → Tümünü senkronize et** ile tekrar deneyin |
+| Servisler yeniden başlayınca oturum düşüyor | 3. adımdaki kalıcı anahtarı oluşturun |
+
+Dışarıya yalnızca gateway (`8080`) API olarak açılır; iam-service ve sse-service compose ağının içindedir. Servislerin metrik portları (`:9100`) da dışarı açılmaz, onları yalnızca Prometheus okur.
+
+### Lokal geliştirme
+
+Testler ve lint için Go 1.26 gerekir:
+
+```bash
+make deps               # sadece PostgreSQL (host:5433) ve Redis (host:6379)
+make test               # tüm modüllerin unit testleri
+make test-integration   # + gerçek PostgreSQL/Redis ile integration testler
+make lint               # go vet + golangci-lint (her modül)
+```
+
+PostgreSQL host'ta **5433** portundan açılır, böylece lokalde çalışan bir PostgreSQL ile çakışmaz. Veritabanına pgAdmin gibi bir araçla `localhost:5433`, kullanıcı `app`, şifre `app` ile bağlanılabilir; veritabanları `contents` ve `iam`.
 
 ---
 
 ## İçindekiler
 
-- [Hızlı Başlangıç](#hızlı-başlangıç)
+- [Kurulum ve Çalıştırma](#kurulum-ve-çalıştırma)
+- [Genel Bakış](#genel-bakış)
 - [Mimari](#mimari)
 - [Akışlar](#akışlar)
 - [Veri Modeli](#veri-modeli)
@@ -41,50 +142,23 @@ Farklı formatlardaki (JSON, XML) içerik sağlayıcılardan (provider) veri top
 
 ---
 
-## Hızlı Başlangıç
+## Genel Bakış
 
-Gereksinim: Docker (Compose v2).
+Farklı formatlardaki (JSON, XML) içerik sağlayıcılardan veri toplayan, bu verileri standart bir formata dönüştürüp ortak bir formülle puanlayan ve aranabilir hale getiren bir arama sistemi. Anahtar kelime araması; tür, provider, etiket ve tarih filtreleri; popülerlik ve alakalılık sıralaması ile sayfalama sunar. Kullanıcılar kayıt olup giriş yapar. **viewer** rolü içerikleri arar ve filtreler; **admin** ek olarak provider ekler, düzenler, siler ve senkronize eder.
 
-```bash
-make up          # ya da: docker compose up --build -d
-```
+![İçerik listesi](docs/images/contents-popularity.png)
 
-| Adres | Açıklama |
+| Servis | Sorumluluk |
 |---|---|
-| http://localhost:8080 | Dashboard (kayıt ol / giriş yap) |
-| http://localhost:8080/docs | Swagger UI (OpenAPI 3) |
-| http://localhost:8080/api/v1/... | API (gateway üzerinden) |
-| http://localhost:8080/readyz | Gateway ve arkasındaki servislerin hazırlık durumu |
-| http://localhost:3000 | Grafana: hazır dashboard'lar (giriş gerektirmez; düzenlemek için `admin` / `admin`) |
-| http://localhost:9090 | Prometheus |
+| **sse-gateway** | Tek giriş noktası. İstekleri sahibi olan servise yönlendirir. Middleware katmanında token doğrulama, rol kontrolü, kademeli rate limit, circuit breaker ve retry; ayrıca dashboard ve API dokümanı |
+| **iam-service** | Kullanıcılar, şifreler, roller, access/refresh token'lar, oturum iptali |
+| **sse-service** | Asıl iş mantığı: provider entegrasyonu, puanlama, arama, cache, senkronizasyon |
 
-Dışarıya API olarak yalnızca gateway açılır. iam-service ve sse-service sadece compose ağı içinden erişilebilir. Servislerin metrik portları (`:9100`) da dışarı açılmaz; onları yalnızca Prometheus okur.
-
-```bash
-# Admin olarak kayıt ol ve token al
-TOKEN=$(curl -s -X POST localhost:8080/api/v1/auth/register -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"s3cret-pass","role":"admin"}' | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
-
-curl -H "Authorization: Bearer $TOKEN" 'localhost:8080/api/v1/contents?q=go&type=video'
-curl -H "Authorization: Bearer $TOKEN" -X POST localhost:8080/api/v1/providers -H 'Content-Type: application/json' \
-  -d '{"name":"my-feed","url":"https://example.com/feed.xml"}'      # format otomatik algılanır
-curl -H "Authorization: Bearer $TOKEN" -X POST localhost:8080/api/v1/sync
-```
-
-Durdurmak için `make down` kullanılır (volume'leri de siler).
-
-**Kalıcı imzalama anahtarı (opsiyonel):** `make keys` bir RSA anahtarı üretir. `.env` dosyasına `JWT_PRIVATE_KEY_FILE=/keys/jwt.pem` eklendiğinde iam-service yeniden başlasa bile verilmiş access token'lar geçerli kalır. Anahtar verilmezse her açılışta yeni bir anahtar üretilir; dashboard bu durumda token'ı refresh ederek devam eder.
-
-### Lokal geliştirme
-
-```bash
-make deps               # sadece PostgreSQL (host:5433) ve Redis (host:6379)
-make test               # tüm modüllerin unit testleri
-make test-integration   # + gerçek PostgreSQL/Redis ile integration testler
-make lint               # go vet + golangci-lint (her modül)
-```
-
-Postgres host'ta **5433** portundan açılır, böylece lokalde çalışan bir Postgres ile çakışmaz. Veritabanına pgAdmin gibi bir araçla `localhost:5433`, kullanıcı `app`, şifre `app` ile bağlanılabilir; veritabanları `contents` ve `iam`.
+- **Dil / framework:** Go 1.26, Fiber v2
+- **Veritabanı:** PostgreSQL 16; her servisin kendi veritabanı var
+- **Cache ve paylaşılan durum:** Redis 7 (opsiyonel; yoksa servisler bellek içi çalışır)
+- **Kimlik doğrulama:** JWT (RS256) access token, JWKS ile dağıtılan public key, rotasyonlu refresh token
+- **İzleme:** Prometheus + Grafana, hazır dashboard'larla
 
 ---
 
