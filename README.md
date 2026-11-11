@@ -246,7 +246,11 @@ Provider'lara giden istekler gateway'den geçmez. Onların rate limit, retry ve 
 
 Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüz (HTML, CSS, vanilla JS). Gateway binary'sine gömülü; açık ve koyu temayı sistem ayarına göre seçiyor ve telefon genişliğinde de çalışıyor.
 
-- **Sonuç listesi:** Her içerik bir satır kartında gösteriliyor: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Sağda skor ve aynı sayfadaki en yüksek skora göre bir çubuk var. Alakalılık sıralamasında alakalılık puanı da görünüyor.
+- **Sonuç listesi:** Her içerik bir satır kartında gösteriliyor: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Kartın sağında, listenin neye göre sıralandığı öne çıkıyor:
+  - **Popülerlik sıralamasında** büyük puntoyla skor.
+  - **Alakalılık sıralamasında** dairesel bir eşleşme göstergesi ("%97", "Güçlü / Orta / Zayıf eşleşme"). Skor küçük bir "Skor 298,25" etiketine iniyor.
+
+  İki sayı hiçbir zaman aynı biçimde gösterilmiyor, bu yüzden birbirine karışmıyor.
 - **Metrikler tek bakışta:** Her kartta dört metrik sütunu var. Sütunlar her satırda aynı yerde durduğu için değerler alt alta karşılaştırılabiliyor:
 
   | | 1 | 2 | 3 | 4 |
@@ -434,7 +438,10 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
   - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
 - **Sıralama:**
   - `popularity`: `score DESC`
-  - `relevance`: `ts_rank + similarity DESC`
+  - `relevance`: `ts_rank + similarity DESC`. Ham değer (ör. 0,7329) kullanıcıya bir şey ifade etmediği için yanıtta ayrıca `match` döner: alakalılığın, aramanın **en iyi sonucuna göre yüzdesi** (en iyisi 100).
+    - Referans sayfa değil bütün aramadır (`max(relevance) OVER ()`): 2. sayfadaki bir sonuç da aynı ölçekte görünür.
+    - Alakalılık sıralaması zaten bütün eşleşmeleri puanladığı için ek maliyeti yoktur. Popülerlik sıralamasında hesaplanmaz, böylece onun index planı korunur.
+    - Mutlak bir ölçek (ör. `ts_rank` normalizasyonu) seçilmedi: başlığında tam aranan kelime geçen bir içerik bile ~%25 çıkıp "kötü eşleşme" gibi görünüyordu.
   - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity.
   - Anahtar kelime olmadan istenen relevance, popularity'ye düşer. `meta.sort` hangisinin kullanıldığını bildirir; dashboard da bunu bir uyarıyla gösterir.
 - **Sayfalama:** offset/limit. Yanıtta `meta{page, per_page, total, total_pages, sort}` döner.

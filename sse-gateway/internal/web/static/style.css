@@ -277,7 +277,7 @@ button.chip.active { border-color: var(--accent); color: var(--accent); backgrou
 
 .item {
   display: grid;
-  grid-template-columns: 34px 44px minmax(0, 1fr) auto 128px;
+  grid-template-columns: 34px 44px minmax(0, 1fr) auto 148px;
   align-items: center;
   gap: 16px;
   padding: 14px 18px;
@@ -320,12 +320,33 @@ button.chip.active { border-color: var(--accent); color: var(--accent); backgrou
 .metric.engagement .metric-value { color: var(--good); }
 .metric.engagement .metric-value svg { color: var(--good); }
 
-.score { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+/* Right side of a card: the figure the list is sorted by. */
+.score { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .score-value { font-size: 22px; font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1; }
 .score-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
-.score-bar { width: 100%; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
-.score-bar span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #6366f1, #a855f7); }
-.relevance { font-size: 11.5px; color: var(--accent); font-weight: 600; }
+
+/* Relevance view: a match gauge, with the score demoted to a small chip. */
+.match { gap: 6px; --tone: var(--accent); }
+.match.strong { --tone: var(--good); }
+.match.weak { --tone: #d97706; }
+.match-head { display: flex; align-items: center; gap: 8px; }
+.gauge svg { display: block; transform: rotate(-90deg); }
+.gauge-track { fill: none; stroke: var(--surface-2); stroke-width: 4; }
+.gauge-fill { fill: none; stroke: var(--tone); stroke-width: 4; stroke-linecap: round; }
+.match-text { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.15; }
+.match-value { font-size: 18px; font-weight: 750; font-variant-numeric: tabular-nums; color: var(--tone); }
+.match-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.score-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.summary-note { color: var(--muted); }
 
 .empty-state {
   padding: 48px 16px;
@@ -493,7 +514,7 @@ button.danger { color: var(--error-text); }
 }
 
 @media (max-width: 1000px) {
-  .item { grid-template-columns: 30px 40px minmax(0, 1fr) 96px; }
+  .item { grid-template-columns: 30px 40px minmax(0, 1fr) 140px; }
   .item .metrics { grid-column: 3 / -1; grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .item .score { grid-column: 4; grid-row: 1; }
 }

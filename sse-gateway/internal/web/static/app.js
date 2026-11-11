@@ -355,7 +355,41 @@
     return box;
   }
 
-  function renderItem(item, rank, maxScore, showRelevance) {
+  // Match levels for the relevance view; the best result of a search is always 100%.
+  const matchLevel = (pct) =>
+    pct >= 90 ? { label: "Güçlü eşleşme", tone: "strong" }
+      : pct >= 60 ? { label: "Orta eşleşme", tone: "medium" }
+        : { label: "Zayıf eşleşme", tone: "weak" };
+
+  // The card's right side shows what the list is sorted by: the score for popularity, a match
+  // gauge for relevance (with the score kept as a small secondary figure). The two numbers never
+  // share a style, so they are not mistaken for each other.
+  function rankingBox(item, ranked) {
+    const box = el("div", "score");
+    if (!ranked) {
+      box.title = "Popülerlik skoru: etkileşim, güncellik ve içerik türünden hesaplanır.";
+      box.append(el("span", "score-value", fmtNumber.format(item.score)), el("span", "score-label", "Skor"));
+      return box;
+    }
+    const pct = item.match ?? 0;
+    const level = matchLevel(pct);
+    box.classList.add("match", level.tone);
+    box.title = "Eşleşme, bu aramanın en iyi sonucuna göre yüzdedir: kelimenin başlıkta ve etiketlerde geçmesine ve başlığın aramaya yakınlığına göre hesaplanır.";
+    const gauge = el("div", "gauge");
+    const r = 15;
+    const c = 2 * Math.PI * r;
+    gauge.innerHTML = `<svg viewBox="0 0 36 36" width="40" height="40" aria-hidden="true">
+      <circle cx="18" cy="18" r="${r}" class="gauge-track"/>
+      <circle cx="18" cy="18" r="${r}" class="gauge-fill" stroke-dasharray="${(c * pct) / 100} ${c}"/></svg>`;
+    const text = el("div", "match-text");
+    text.append(el("span", "match-value", `%${pct}`), el("span", "match-label", level.label));
+    const head = el("div", "match-head");
+    head.append(gauge, text);
+    box.append(head, el("span", "score-chip", `Skor ${fmtNumber.format(item.score)}`));
+    return box;
+  }
+
+  function renderItem(item, rank, ranked) {
     const li = el("li", "item");
     li.tabIndex = 0;
     li.setAttribute("aria-label", `${item.title}, skor ${fmtNumber.format(item.score)}`);
@@ -370,14 +404,7 @@
     const metrics = el("div", "metrics");
     for (const column of metricColumns[item.type] || []) metrics.append(metricCell(column, item.metrics));
 
-    const score = el("div", "score");
-    const bar = el("div", "score-bar");
-    const fill = el("span");
-    fill.style.width = `${Math.max(4, (item.score / maxScore) * 100)}%`;
-    bar.append(fill);
-    bar.title = "Bu sayfadaki en yüksek skora göre";
-    score.append(el("span", "score-value", fmtNumber.format(item.score)), el("span", "score-label", "Skor"), bar);
-    if (showRelevance) score.append(el("span", "relevance", `Alakalılık ${fmtNumber.format(item.relevance ?? 0)}`));
+    const score = rankingBox(item, ranked);
 
     li.append(el("span", "rank", `#${rank}`), typeIcon(item.type), main, metrics, score);
     li.addEventListener("click", () => openDetail(item.id));
@@ -413,14 +440,15 @@
   function renderContents(items, meta) {
     const list = $("results");
     list.replaceChildren();
-    const showRelevance = meta.sort === "relevance";
+    const ranked = meta.sort === "relevance";
     // The API falls back to popularity when relevance is requested without a keyword; say so.
-    $("sort-hint").hidden = !($("sort").value === "relevance" && !showRelevance);
+    $("sort-hint").hidden = !($("sort").value === "relevance" && !ranked);
 
     const summary = $("summary");
     summary.replaceChildren();
     if (meta.total) {
       summary.append(el("strong", "", fmtNumber.format(meta.total)), ` sonuç · ${sortLabels[meta.sort] || meta.sort} sıralaması`);
+      if (ranked) summary.append(el("span", "summary-note", " · eşleşme, en iyi sonuca göre yüzde"));
     }
 
     if (items.length === 0) {
@@ -429,9 +457,8 @@
       list.append(empty);
     }
 
-    const maxScore = Math.max(...items.map((i) => i.score), 1);
     const offset = (meta.page - 1) * meta.per_page;
-    items.forEach((item, i) => list.append(renderItem(item, offset + i + 1, maxScore, showRelevance)));
+    items.forEach((item, i) => list.append(renderItem(item, offset + i + 1, ranked)));
 
     state.totalPages = meta.total_pages;
     renderPager(meta.page, meta.total_pages);
