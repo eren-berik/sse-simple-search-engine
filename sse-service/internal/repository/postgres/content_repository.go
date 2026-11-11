@@ -220,31 +220,39 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		return result, nil
 	}
 
-	// Relevance sorting already scores every match, so the best score of the whole search (not just
-	// this page) comes at no extra cost and turns raw relevance into a match ratio. Popularity
-	// sorting skips it to keep its index-only plan.
-	best := "0::float8"
-	if q.Sort == domain.SortRelevance {
-		best = "max(relevance) OVER ()"
+	// The match ratio is relative to the best result of the whole search, not of this page. On
+	// page 1 that is simply the first row; later pages need max(...) OVER (), which costs ~20-50%
+	// more on searches matching many rows (see scripts/search-benchmark), so it is only added there.
+	// Popularity sorting needs neither and keeps its index-only plan.
+	bestSQL := "0::float8"
+	if q.Sort == domain.SortRelevance && q.Offset() > 0 {
+		bestSQL = "max(relevance) OVER ()"
 	}
 	sql := fmt.Sprintf(`SELECT *, %s AS best FROM (SELECT %s, %s AS relevance FROM contents %s) hits
 		ORDER BY %s LIMIT @limit OFFSET @offset`,
-		best, contentColumns, relevance, where, orderBy)
+		bestSQL, contentColumns, relevance, where, orderBy)
 	rows, err := r.pool.Query(ctx, sql, args)
 	if err != nil {
 		return domain.SearchResult{}, fmt.Errorf("search contents: %w", err)
 	}
+	var best float64 // the search's best relevance, the same on every row
 	hits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.SearchHit, error) {
 		var h domain.SearchHit
-		var best float64
 		err := row.Scan(append(contentDest(&h.Content), &h.Relevance, &best)...)
-		if best > 0 {
-			h.Match = h.Relevance / best
-		}
 		return h, err
 	})
 	if err != nil {
 		return domain.SearchResult{}, fmt.Errorf("scan contents: %w", err)
+	}
+	if q.Sort == domain.SortRelevance {
+		if q.Offset() == 0 {
+			best = hits[0].Relevance
+		}
+		for i := range hits {
+			if best > 0 {
+				hits[i].Match = hits[i].Relevance / best
+			}
+		}
 	}
 	result.Hits = hits
 	return result, nil

@@ -444,8 +444,10 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
     - **Eşitlikte** popülerlik skoru belirler; aynı şekilde eşleşen içeriklerden daha değerli olan öne çıkar.
     - **Neden başlık benzerliği eklenmiyor:** İlk sürümde `similarity(title, q)` de ekleniyordu. Bu kısa başlıkları ödüllendiriyor ve harf tesadüflerine puan veriyordu: "testing" ile "programming" ortak "ing" içerdiği için aynı şekilde eşleşen içerikler %21 ile %31 arasına saçılıyordu.
   - Ham değer kullanıcıya bir şey ifade etmediği için yanıtta ayrıca `match` döner: alakalılığın, aramanın **en iyi sonucuna göre yüzdesi** (en iyisi 100).
-    - Referans sayfa değil bütün aramadır (`max(relevance) OVER ()`): 2. sayfadaki bir sonuç da aynı ölçekte görünür.
-    - Alakalılık sıralaması zaten bütün eşleşmeleri puanladığı için ek maliyeti yoktur. Popülerlik sıralamasında hesaplanmaz, böylece onun index planı korunur.
+    - Referans sayfa değil bütün aramadır: 2. sayfadaki bir sonuç da aynı ölçekte görünür.
+    - **1. sayfada** en iyi sonuç zaten listenin ilk satırıdır; ek bir şey hesaplanmaz.
+    - **Sonraki sayfalarda** en iyi değer `max(relevance) OVER ()` ile bulunur. Bu, çok satırla eşleşen aramalarda sorguyu %20–50 uzatır (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)); bu yüzden yalnızca orada eklenir.
+    - Popülerlik sıralamasında hesaplanmaz, böylece onun index planı korunur.
     - Mutlak bir ölçek (ör. `ts_rank` normalizasyonu) seçilmedi: başlığında tam aranan kelime geçen bir içerik bile ~%25 çıkıp "kötü eşleşme" gibi görünüyordu.
   - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity.
   - Anahtar kelime olmadan istenen relevance, popularity'ye düşer. `meta.sort` hangisinin kullanıldığını bildirir; dashboard da bunu bir uyarıyla gösterir.
