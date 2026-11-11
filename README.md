@@ -619,13 +619,54 @@ Her servis ayrıca `METRICS_ADDR` (varsayılan `:9100`) ile Prometheus metrikler
 
 ---
 
+## Ölçeklenme Planı
+
+### Ölçüm: 1 milyon kayıtta arama
+`scripts/search-benchmark/` script'leri, `contents` tablosunun aynısını (aynı kolonlar, otomatik arama sütunu ve index'ler) ayrı bir şemada 1 milyon sentetik kayıtla kurar ve servisin çalıştırdığı SQL'i (sayım + 20'lik sayfa) ölçer. Kelime dağılımı bilerek zorlayıcıdır: "go" kayıtların %28'inde, "docker" %9'unda geçer.
+
+| Senaryo | Sayım | Sayfa | Toplam |
+|---|---|---|---|
+| Kelimesiz, popülerlik, 1. sayfa | 194 ms | ~0 ms | ~0,2 sn |
+| Kelimesiz, popülerlik, 5000. sayfa (offset 100 bin) | 194 ms | 210 ms | ~0,4 sn |
+| `q=go` (%28), alakalılık, 1. sayfa | 330 ms | 372 ms | **~0,7 sn** |
+| `q=go`, alakalılık, 2. sayfa (eşleşme yüzdesi için `max() OVER ()`) | 328 ms | 477 ms | ~0,8 sn |
+| `q=docker` (%9), alakalılık | 110 ms | 123 ms | ~0,23 sn |
+| Nadir kelime (769 kayıt), alakalılık | 3 ms | 3 ms | 6 ms |
+| `q=go`, popülerlik | 325 ms | ~0 ms | ~0,3 sn |
+| Kelimenin bir parçası (`kuberne`) | 103 ms | 196 ms | ~0,3 sn |
+| Etiket filtresi | 16 ms | 4 ms | 20 ms |
+
+Süreler cache'te olmayan istek içindir; cache'ten dönen istek birkaç ms sürer. Docker'ın paylaşımlı bellek sınırı nedeniyle paralel sorgu kapalıydı; gerçek bir sunucuda süreler daha kısa olur, ama veriyle doğrusal büyüme değişmez.
+
+Alakalılık formülünden başlık benzerliği (`similarity`) çıkarılınca satır başına yapılan hesap azaldı. Yaygın bir kelimede sayfa sorgusu 634 ms'den 372 ms'ye indi (bkz. [Arama ve Sıralama](#arama-ve-sıralama)).
+
+**Bulgular:**
+- **Alakalılık sıralaması bütün eşleşmeleri puanlar.** Index eşleşen satırları hızlı bulur, ama "en alakalı 20"yi bulamaz. `ts_rank` her eşleşmede hesaplanıp sıralanır, yani süre eşleşme sayısıyla doğrusal büyür. 10 milyon kayıtta yaygın bir kelime ~5–7 sn sürer.
+- **`COUNT(*)` maliyetin yaklaşık yarısıdır.** Popülerlik sıralamasında sayfa index'ten anında gelir; süreyi toplam sayım belirler.
+- **Derin sayfalar:** Offset, önceki satırları okuyup atar. Alakalılıkta 2. sayfa ve sonrası, eşleşme yüzdesinin referansı için ayrıca en iyi değeri hesaplar (%25–50).
+
+### Plan
+| Aşama | Ne zaman | Adım | Beklenen etki |
+|---|---|---|---|
+| 1 | ~1M kayıt | **Sayımı sınırla:** en fazla 10.001 satır say, "10.000+" göster; ya da planner tahminini kullan | Her aramada %30–50 kazanç |
+| 1 | ~1M kayıt | **Keyset sayfalama:** "son görülen (skor, id)'den sonrası" | Derin sayfalar 1. sayfa kadar hızlı |
+| 2 | ~5M kayıt | **Aday kümesini sınırla:** çok yaygın kelimelerde alakalılığı bütün eşleşmeler yerine, popülerlik index'inden gelen en iyi birkaç bin aday içinde hesapla. Sonuç anlamı biraz değişir: çok popüler olmayan bir tam eşleşme kaçabilir. | Yaygın kelimelerde süre eşleşme sayısından bağımsızlaşır |
+| 2 | ~5M kayıt | **Eşleşme referansını cache'le:** 1. sayfada bulunan en iyi alakalılık değerini cache'leyip sonraki sayfalarda yeniden kullan | 2. sayfa ve sonrasında %25–50 kazanç |
+| 2 | ~5M kayıt | **`rum` index'i:** kelime konumlarını index'te tutar; en alakalı k sonuç doğrudan index'ten gelir | Sıralama eşleşme sayısından bağımsızlaşır (eklenti kurulumu gerekir) |
+| 3 | 10M+ kayıt | **Ayrı arama motoru:** Elasticsearch / OpenSearch / Meilisearch read model olarak; PostgreSQL kaynak veri olarak kalır, sync arama motorunu da besler | BM25 + block-max WAND ile "en iyi k sonuç"; dil desteği (kök bulma); yatay ölçekleme |
+
+Arama bir arayüzün (`ContentSearcher`) arkasında olduğu için 2. ve 3. aşamalar servis ve API değişmeden yapılabilir.
+
+Arama dışındaki ölçeklenme notları:
+- Birden fazla sse-service instance'ında periyodik sync'in tek kopyada çalışması için Postgres advisory lock kullanılabilir.
+- Paralel sorgu için paylaşımlı bellek yeterli olmalı (Docker'da `shm_size`).
+
+---
+
 ## Bilinen Sınırlamalar ve Geliştirme Fikirleri
 
 - **Serbest rol seçimi:** Yukarıda anlatıldığı gibi demo amaçlı. Gerçek bir sistemde admin yetkisi ayrı bir kanaldan verilmeli.
 - **Refresh token'ın saklandığı yer:** Dashboard'da `HttpOnly` cookie'ye taşınabilir.
 - **Kullanıcı yönetimi:** Rol değiştirme, kullanıcı silme ve şifre sıfırlama endpoint'leri yok. Süresi dolmuş refresh token'lar için periyodik bir temizlik job'ı eklenebilir.
-- **Ölçeklenme:**
-  - Birden fazla sse-service instance'ında periyodik sync'in tek kopyada çalışması için Postgres advisory lock kullanılabilir.
-  - Offset pagination yerine keyset pagination kullanılabilir.
-  - Arama yükü büyürse Elasticsearch/OpenSearch read model olarak eklenebilir.
+- **Ölçeklenme:** Ölçüm ve aşamalı plan için bkz. [Ölçeklenme Planı](#ölçeklenme-planı).
 - **Gözlemlenebilirlik:** OpenTelemetry tracing eklenebilir; request-id altyapısı hazır. Prometheus'a alert kuralları (örneğin açık devre, 5xx oranı, `token_reused`) ve Alertmanager eklenebilir.
