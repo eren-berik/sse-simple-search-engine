@@ -869,7 +869,7 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
     - **Kelimenin yalnızca bir parçası geçiyorsa** (ör. "kuberne"): `word_similarity` kullanılır, 0,4 ile ölçeklenir; böylece her zaman tam eşleşmelerin altında kalır.
     - **Eşitlikte** popülerlik skoru belirler; aynı şekilde eşleşen içeriklerden daha değerli olan öne çıkar.
     - **Neden başlık benzerliği eklenmiyor:** İlk sürümde `similarity(title, q)` de ekleniyordu. Bu kısa başlıkları ödüllendiriyor ve harf tesadüflerine puan veriyordu: "testing" ile "programming" ortak "ing" içerdiği için aynı şekilde eşleşen içerikler %21 ile %31 arasına saçılıyordu. Çıkarılması yaygın kelimelerde sorguyu da hızlandırdı (634 → 372 ms, 1 milyon kayıtta).
-  - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity. Anahtar kelime olmadan istenen relevance, popularity'ye düşer; `meta.sort` hangisinin kullanıldığını bildirir, dashboard da bunu bir uyarıyla gösterir:
+  - `sort` verilmezse popularity kullanılır; alakalılık sıralaması açıkça `sort=relevance` ile istenir. Anahtar kelime olmadan istenen relevance, popularity'ye düşer; `meta.sort` hangisinin kullanıldığını bildirir, dashboard da bunu bir uyarıyla gösterir:
 
     <img src="docs/images/sort-hint.png" alt="Kelimesiz alakalılık uyarısı" width="700">
 - **Eşleşme yüzdesi (`match`):** Ham alakalılık değeri (ör. 0,7295) kullanıcıya bir şey ifade etmediği için yanıtta ayrıca alakalılığın **aramanın en iyi sonucuna göre yüzdesi** döner (en iyisi 100).

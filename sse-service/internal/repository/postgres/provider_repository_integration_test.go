@@ -71,7 +71,7 @@ func TestSearchByProvider(t *testing.T) {
 		assert.Equal(t, "provider2", h.Content.Provider)
 	}
 
-	combined := search(t, repo, domain.SearchQuery{Provider: "provider1", Keyword: "docker"})
+	combined := search(t, repo, domain.SearchQuery{Provider: "provider1", Keyword: "docker", Sort: domain.SortRelevance})
 	assert.Equal(t, 0, combined.Total, "filters combine with the keyword")
 }
 

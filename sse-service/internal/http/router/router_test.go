@@ -191,7 +191,7 @@ func TestListContents(t *testing.T) {
 	s := &fakeSearcher{}
 	app := newApp(t, s, fakeSyncer{})
 
-	resp, body := app.get("/api/v1/contents?q=go&type=video&provider=Provider1&page=2&per_page=10")
+	resp, body := app.get("/api/v1/contents?q=go&type=video&provider=Provider1&sort=relevance&page=2&per_page=10")
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "HIT", resp.Header.Get("X-Cache"))
