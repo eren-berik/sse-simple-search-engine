@@ -504,7 +504,8 @@ Her provider sync'inin sonucu; dashboard'daki "son senkronizasyon" bilgisi burad
 | `contents_title_trgm_idx` | contents | GIN (`gin_trgm_ops`) | `title` | Kelime parçası araması (`title ILIKE '%kuberne%'`) |
 | `contents_score_idx` | contents | B-tree | `(score DESC, id)` | Popülerlik sıralaması: ilk sayfa index'ten okunur, tablo sıralanmaz |
 | `contents_type_score_idx` | contents | B-tree | `(type, score DESC, id)` | Tür filtresi + popülerlik |
-| `contents_tags_idx` | contents | GIN | `tags` | Etiket filtresi (`tags @> ARRAY['devops']`) |
+| `contents_tags_idx` | contents | GIN | `tags` | Etiket filtresi (`tags && ARRAY[...]` herhangi biri, `tags @> ARRAY[...]` hepsi) |
+| `contents_published_at_idx` | contents | B-tree | `published_at` | Tarih filtresi; başka bir filtreyle birlikte iki index kesiştirilir (`BitmapAnd`) |
 | `providers_pkey` | providers | B-tree | `id` | Provider düzenleme / silme |
 | `providers_name_key` | providers | B-tree, UNIQUE | `name` | Foreign key hedefi; her aramadaki "provider etkin mi" kontrolü |
 | `sync_runs_pkey` | sync_runs | B-tree | `id` | |
@@ -516,7 +517,7 @@ Her provider sync'inin sonucu; dashboard'daki "son senkronizasyon" bilgisi burad
 | `refresh_tokens_family_id_idx` | refresh_tokens | B-tree | `family_id` | Bir oturumun bütün token'larını iptal etme |
 | `refresh_tokens_user_id_idx` | refresh_tokens | B-tree | `user_id` | Kullanıcı silinince cascade |
 
-Bilinçli olarak eklenmeyenler: `published_at` (tarih filtresi) ve `removed_at` için index yok. Bugünkü veri boyutunda tarih filtresi diğer koşullarla birlikte çalışıyor. Veri büyürse `published_at` için bir B-tree ve `WHERE removed_at IS NULL` koşullu (partial) index'ler eklenmeli (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)).
+Bilinçli olarak eklenmeyen: `removed_at` için index yok; gizlenen kayıtlar az olduğu sürece `removed_at IS NULL` koşulu ucuzdur. Gizlenen kayıtlar çoğalırsa `WHERE removed_at IS NULL` koşullu (partial) index'ler eklenmeli (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)). `published_at` index'inin etkisi [ölçüldü](#ölçüm-etiket-ve-tarih-filtreleri).
 
 ### Tutarlılık
 
@@ -536,6 +537,7 @@ Bilinçli olarak eklenmeyenler: `published_at` (tarih filtresi) ve `removed_at` 
 | sse | `00004_provider_rename_and_delete` | Foreign key'e `ON UPDATE / ON DELETE CASCADE` |
 | sse | `00005_index_content_tags` | Etiket filtresi için GIN index |
 | sse | `00006_content_removal` | `contents.removed_at`, `sync_runs.removed` |
+| sse | `00007_index_content_published_at` | Tarih filtresi için B-tree index |
 | iam | `00001_create_users` | Kullanıcılar |
 | iam | `00002_create_refresh_tokens` | Refresh token'lar ve index'leri |
 
@@ -1156,6 +1158,7 @@ Kimlik yönetimi ile içerik araması farklı hızlarda değişen, farklı güve
 | Kısmi eşleşme ("kubern" → Kubernetes) | `pg_trgm` GIN index ile `ILIKE` |
 | Popülerliğe göre sıralama | Önceden hesaplanmış `score` kolonu + `(score DESC, id)` ve `(type, score DESC, id)` index'leri |
 | Etiket filtresi | `TEXT[]` kolonu + GIN index |
+| Tarih filtresi | `published_at` B-tree index |
 | Token rotasyonu | Tek bir koşullu `UPDATE` ile atomik "tüket" işlemi |
 
 - **MongoDB:** Formatlar arası farklar zaten mapper katmanında normalize ediliyor, bu yüzden şema esnekliği belirleyici değil. Ayrıca Mongo'nun text search'ü koleksiyon başına tek index'le sınırlı ve kısmi eşleşme yapamıyor. Çok dokümanlı transaction için de replica set gerekiyor.
@@ -1196,7 +1199,6 @@ Redis hepsi için opsiyoneldir; ulaşılamazsa sistem çalışmaya devam eder (b
 | Nadir kelime (769 kayıt), alakalılık | 3 ms | 3 ms | 6 ms |
 | `q=go`, popülerlik | 325 ms | ~0 ms | ~0,3 sn |
 | Kelimenin bir parçası (`kuberne`) | 103 ms | 196 ms | ~0,3 sn |
-| Etiket filtresi | 16 ms | 4 ms | 20 ms |
 
 Süreler cache'te olmayan istek içindir; cache'ten dönen istek birkaç ms sürer. Docker'ın paylaşımlı bellek sınırı nedeniyle paralel sorgu kapalıydı; gerçek bir sunucuda süreler daha kısa olur, ama veriyle doğrusal büyüme değişmez.
 
@@ -1205,13 +1207,28 @@ Süreler cache'te olmayan istek içindir; cache'ten dönen istek birkaç ms sür
 - **`COUNT(*)` maliyetin yaklaşık yarısıdır.** Popülerlik sıralamasında sayfa index'ten anında gelir; süreyi toplam sayım belirler.
 - **Derin sayfalar:** Offset, önceki satırları okuyup atar. Alakalılıkta 2. sayfa ve sonrası, eşleşme yüzdesinin referansı için ayrıca en iyi değeri hesaplar (%25–50).
 
+### Ölçüm: etiket ve tarih filtreleri
+
+`scripts/search-benchmark/filters.py` aynı 1 milyon kayıtta etiket ve tarih filtrelerini ölçer (sayım + 20'lik sayfa, 3 denemenin en iyisi). Etiketlerin dağılımı da dengesizdir: `go` kayıtların %3,6'sında geçer, `w4000` gibi etiketler yalnızca birkaç yüz kayıtta.
+
+<img src="docs/images/bench-tag-filter.svg" alt="Etiket filtresi süreleri: filtre yok 199 ms, 10 yaygın etiketten herhangi biri 110 ms, üç etiketten herhangi biri 89 ms, go 71 ms, go + metin 30 ms, go ve docker birlikte 3,2 ms, nadir etiket 1,3 ms" width="780">
+
+- **Etiket index'i (GIN) her iki modda da kullanılır.** "Herhangi biri" (`&&`) ve "hepsi" (`@>`) aynı index'ten gider; index taraması yaygın bir etikette bile ~3 ms sürer.
+- **Sayfa her senaryoda en fazla 2 ms.** Etiket yaygınsa PostgreSQL popülerlik index'inde ilerleyip eşleşenleri toplar ve ilk 20'yi hemen bulur. Etiket nadirse ya da birden fazla etiketin hepsi istenirse önce GIN index'inden eşleşenleri bulur ve bu az sayıdaki satırı sıralar. Planner ikisi arasında doğru seçimi yapar.
+- **Süreyi toplam sayımı belirler:** Eşleşen her satırın tablodan okunması gerekir. Bu etikete özgü değildir; filtresiz liste de aynı nedenle en uzun süreyi alır. Bkz. Plan'daki "sayımı sınırla" adımı.
+
+<img src="docs/images/bench-date-index.svg" alt="published_at index'i olmadan ve index ile: son 7 gün 144 ms'den 17 ms'ye, go etiketi + son 7 gün 172 ms'den 9,3 ms'ye" width="780">
+
+- **Tarih filtresi `published_at` index'i eklenene kadar en zayıf noktaydı.** Index yokken "son 7 gün" sayımı bütün tabloyu tarıyordu. Etiketle birlikte kullanıldığında planner, 231 eşleşmeden ilk 20'yi bulmak için popülerlik index'inde uzun bir yol yürüyordu.
+- **Index ile** PostgreSQL etiket ve tarih index'lerini kesiştirir (`BitmapAnd`) ve yalnızca kesişen satırları okur: 8 ve 18 kat hızlanma. Migration: `00007_index_content_published_at`.
+
 ### Plan
 
 | Aşama | Ne zaman | Adım | Beklenen etki |
 |---|---|---|---|
 | 1 | ~1M kayıt | **Sayımı sınırla:** en fazla 10.001 satır say, "10.000+" göster; ya da planner tahminini kullan | Her aramada %30–50 kazanç |
 | 1 | ~1M kayıt | **Keyset sayfalama:** "son görülen (skor, id)'den sonrası" | Derin sayfalar 1. sayfa kadar hızlı |
-| 1 | ~1M kayıt | **Eksik index'ler:** `published_at` için B-tree, `WHERE removed_at IS NULL` koşullu index'ler | Tarih filtresi ve gizlenen kayıtların bol olduğu durumlar |
+| 1 | ~1M kayıt | **Koşullu index'ler:** `WHERE removed_at IS NULL` (`published_at` index'i [eklendi](#ölçüm-etiket-ve-tarih-filtreleri)) | Gizlenen kayıtların bol olduğu durumlar |
 | 2 | ~5M kayıt | **Aday kümesini sınırla:** çok yaygın kelimelerde alakalılığı bütün eşleşmeler yerine, popülerlik index'inden gelen en iyi birkaç bin aday içinde hesapla. Sonuç anlamı biraz değişir: çok popüler olmayan bir tam eşleşme kaçabilir. | Yaygın kelimelerde süre eşleşme sayısından bağımsızlaşır |
 | 2 | ~5M kayıt | **Eşleşme referansını cache'le:** 1. sayfada bulunan en iyi alakalılık değerini cache'leyip sonraki sayfalarda yeniden kullan | 2. sayfa ve sonrasında %25–50 kazanç |
 | 2 | ~5M kayıt | **`rum` index'i:** kelime konumlarını index'te tutar; en alakalı k sonuç doğrudan index'ten gelir | Sıralama eşleşme sayısından bağımsızlaşır (eklenti kurulumu gerekir) |

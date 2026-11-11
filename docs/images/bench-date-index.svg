@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="308" viewBox="0 0 780 308" role="img" aria-labelledby="t d">
+<title id="t">Tarih filtresi · published_at index&#x27;i</title><desc id="d">published_at index&#x27;i olmadan ve index ile sorgu süreleri: Son 7 gün: index yok 144 ms, index var 17 ms; go etiketi + son 7 gün: index yok 172 ms, index var 9,3 ms</desc>
+
+<style>
+  .surface { fill: #fcfcfb; stroke: rgba(11,11,11,0.10); }
+  .title { fill: #0b0b0b; font: 600 16px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .sub { fill: #52514e; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .label { fill: #0b0b0b; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .note { fill: #898781; font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .value { fill: #0b0b0b; font: 600 12.5px system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+  .tick { fill: #898781; font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+  .grid { stroke: #e1e0d9; stroke-width: 1; }
+  .axis { stroke: #c3c2b7; stroke-width: 1; }
+  .s1 { fill: #2a78d6; }
+  .s2 { fill: #eb6834; }
+  @media (prefers-color-scheme: dark) {
+    .surface { fill: #1a1a19; stroke: rgba(255,255,255,0.10); }
+    .title, .label, .value { fill: #f0efec; }
+    .sub { fill: #c3c2b7; }
+    .grid { stroke: #2c2c2a; }
+    .axis { stroke: #383835; }
+    .s1 { fill: #3987e5; }
+    .s2 { fill: #d95926; }
+  }
+</style>
+<rect class="surface" x="0.5" y="0.5" width="779" height="307" rx="12"/>
+<text class="title" x="24" y="34">Tarih filtresi · published_at index&#x27;i</text>
+<text class="sub" x="24" y="55">Toplam süre (sayım + 20&#x27;lik sayfa), 1 milyon kayıt.</text>
+<rect class="s2" x="24" y="70" width="12" height="12" rx="3"/>
+<text class="sub" x="42" y="80.5">Index yok</text>
+<rect class="s1" x="134" y="70" width="12" height="12" rx="3"/>
+<text class="sub" x="152" y="80.5">Index var</text>
+<line class="axis" x1="244.0" y1="100" x2="244.0" y2="252"/>
+<text class="tick" x="244.0" y="270" text-anchor="middle">0 ms</text>
+<line class="grid" x1="354.0" y1="100" x2="354.0" y2="252"/>
+<text class="tick" x="354.0" y="270" text-anchor="middle">50 ms</text>
+<line class="grid" x1="464.0" y1="100" x2="464.0" y2="252"/>
+<text class="tick" x="464.0" y="270" text-anchor="middle">100 ms</text>
+<line class="grid" x1="574.0" y1="100" x2="574.0" y2="252"/>
+<text class="tick" x="574.0" y="270" text-anchor="middle">150 ms</text>
+<line class="grid" x1="684.0" y1="100" x2="684.0" y2="252"/>
+<text class="tick" x="684.0" y="270" text-anchor="middle">200 ms</text>
+<text class="label" x="24" y="128">Son 7 gün</text>
+<text class="note" x="24" y="145">7.138 kayıt eşleşiyor</text>
+<path class="s2" d="M244,112 H557.9 Q561.9,112 561.9,116 V130 Q561.9,134 557.9,134 H244 Z"/>
+<text class="value" x="569.9" y="127.5">144 ms</text>
+<path class="s1" d="M244,136 H277.84000000000003 Q281.84000000000003,136 281.84000000000003,140 V154 Q281.84000000000003,158 277.84000000000003,158 H244 Z"/>
+<text class="value" x="289.84000000000003" y="151.5">17 ms</text>
+<text class="note" x="24" y="162">8 kat hızlı</text>
+<text class="label" x="24" y="204">go etiketi + son 7 gün</text>
+<text class="note" x="24" y="221">231 kayıt eşleşiyor</text>
+<path class="s2" d="M244,188 H618.4 Q622.4,188 622.4,192 V206 Q622.4,210 618.4,210 H244 Z"/>
+<text class="value" x="630.4" y="203.5">172 ms</text>
+<path class="s1" d="M244,212 H260.46 Q264.46,212 264.46,216 V230 Q264.46,234 260.46,234 H244 Z"/>
+<text class="value" x="272.46" y="227.5">9,3 ms</text>
+<text class="note" x="24" y="238">18 kat hızlı</text>
+</svg>
