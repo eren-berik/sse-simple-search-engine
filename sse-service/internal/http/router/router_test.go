@@ -44,7 +44,7 @@ func (f *fakeSearcher) Search(_ context.Context, q domain.SearchQuery) (domain.S
 		Total: 21, Page: q.Page, PerPage: q.PerPage, Sort: q.Sort,
 		Hits: []domain.SearchHit{{
 			Content:   domain.Content{ID: 1, Provider: "provider1", ExternalID: "v1", Title: "Go", Type: domain.ContentTypeVideo, Score: 41.29999},
-			Relevance: 0.123456,
+			Relevance: 0.123456, Match: 0.876,
 		}},
 	}, search.CacheHit, nil
 }
@@ -202,6 +202,7 @@ func TestListContents(t *testing.T) {
 	item := items[0].(map[string]any)
 	assert.Equal(t, 41.3, item["score"], "score is rounded to 2 decimals")
 	assert.Equal(t, 0.1235, item["relevance"], "relevance is present when sorted by relevance")
+	assert.Equal(t, 88.0, item["match"], "match is a whole percentage of the best result")
 
 	meta := body["meta"].(map[string]any)
 	assert.Equal(t, float64(3), meta["total_pages"])
@@ -209,6 +210,7 @@ func TestListContents(t *testing.T) {
 
 	_, body = app.get("/api/v1/contents?sort=popularity")
 	assert.NotContains(t, body["data"].([]any)[0].(map[string]any), "relevance")
+	assert.NotContains(t, body["data"].([]any)[0].(map[string]any), "match")
 
 	resp, _ = app.get("/api/v1/contents?tag=DevOps&published_from=2024-03-01&published_to=2024-03-31")
 	require.Equal(t, http.StatusOK, resp.StatusCode)

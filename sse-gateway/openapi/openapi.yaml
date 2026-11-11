@@ -477,7 +477,8 @@ components:
         title: { type: string, example: Go Programming Tutorial }
         type: { type: string, enum: [video, text] }
         score: { type: number, example: 41.3 }
-        relevance: { type: number, description: Present only when sorted by relevance }
+        relevance: { type: number, description: 'Raw relevance (ts_rank + trigram similarity); present only when sorted by relevance' }
+        match: { type: integer, minimum: 0, maximum: 100, example: 97, description: 'Relevance as a percentage of the best match of the whole search (the best is 100, on every page); present only when sorted by relevance' }
         metrics: { $ref: '#/components/schemas/Metrics' }
         tags:
           type: array

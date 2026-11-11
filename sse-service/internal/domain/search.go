@@ -98,10 +98,13 @@ func (q SearchQuery) Offset() int {
 	return (q.Page - 1) * q.PerPage
 }
 
-// SearchHit is a single search result with its query-time relevance.
+// SearchHit is a single search result with its query-time relevance. Match is the relevance
+// relative to the best match of the whole search (0..1, the best is 1); it is only set when
+// results are sorted by relevance.
 type SearchHit struct {
 	Content   Content
 	Relevance float64
+	Match     float64
 }
 
 // SearchResult is a page of search hits.

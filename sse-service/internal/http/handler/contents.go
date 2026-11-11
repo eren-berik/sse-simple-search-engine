@@ -31,13 +31,15 @@ func NewContentHandler(svc Searcher) *ContentHandler {
 }
 
 type contentDTO struct {
-	ID          int64          `json:"id"`
-	Provider    string         `json:"provider"`
-	ExternalID  string         `json:"external_id"`
-	Title       string         `json:"title"`
-	Type        string         `json:"type"`
-	Score       float64        `json:"score"`
-	Relevance   *float64       `json:"relevance,omitempty"`
+	ID         int64    `json:"id"`
+	Provider   string   `json:"provider"`
+	ExternalID string   `json:"external_id"`
+	Title      string   `json:"title"`
+	Type       string   `json:"type"`
+	Score      float64  `json:"score"`
+	Relevance  *float64 `json:"relevance,omitempty"`
+	// Match is the relevance as a percentage of the search's best match (100); only when sorted by relevance.
+	Match       *int           `json:"match,omitempty"`
 	Metrics     domain.Metrics `json:"metrics"`
 	Tags        []string       `json:"tags"`
 	PublishedAt time.Time      `json:"published_at"`
@@ -99,6 +101,8 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 		if res.Sort == domain.SortRelevance {
 			r := round(hit.Relevance, 4)
 			dto.Relevance = &r
+			m := int(math.Round(hit.Match * 100))
+			dto.Match = &m
 		}
 		items = append(items, dto)
 	}

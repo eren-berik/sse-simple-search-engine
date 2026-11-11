@@ -205,15 +205,27 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		return result, nil
 	}
 
-	sql := fmt.Sprintf(`SELECT %s, %s AS relevance FROM contents %s ORDER BY %s LIMIT @limit OFFSET @offset`,
-		contentColumns, relevance, where, orderBy)
+	// Relevance sorting already scores every match, so the best score of the whole search (not just
+	// this page) comes at no extra cost and turns raw relevance into a match ratio. Popularity
+	// sorting skips it to keep its index-only plan.
+	best := "0::float8"
+	if q.Sort == domain.SortRelevance {
+		best = "max(relevance) OVER ()"
+	}
+	sql := fmt.Sprintf(`SELECT *, %s AS best FROM (SELECT %s, %s AS relevance FROM contents %s) hits
+		ORDER BY %s LIMIT @limit OFFSET @offset`,
+		best, contentColumns, relevance, where, orderBy)
 	rows, err := r.pool.Query(ctx, sql, args)
 	if err != nil {
 		return domain.SearchResult{}, fmt.Errorf("search contents: %w", err)
 	}
 	hits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.SearchHit, error) {
 		var h domain.SearchHit
-		err := row.Scan(append(contentDest(&h.Content), &h.Relevance)...)
+		var best float64
+		err := row.Scan(append(contentDest(&h.Content), &h.Relevance, &best)...)
+		if best > 0 {
+			h.Match = h.Relevance / best
+		}
 		return h, err
 	})
 	if err != nil {

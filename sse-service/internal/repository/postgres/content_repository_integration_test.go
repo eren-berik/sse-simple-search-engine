@@ -370,3 +370,27 @@ func TestRecalculateScoresWritesOnlyChangedScores(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT score FROM contents WHERE provider = 'provider1' AND external_id = 'v1'`).Scan(&score))
 	assert.InDelta(t, original-5, score, 1e-9)
 }
+
+func TestRelevanceMatchIsRelativeToTheBestResult(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	all := search(t, repo, domain.SearchQuery{Keyword: "go", PerPage: 100})
+	require.NotEmpty(t, all.Hits)
+	assert.InDelta(t, 1.0, all.Hits[0].Match, 1e-9, "the best result is the reference")
+	for i, h := range all.Hits {
+		assert.InDelta(t, all.Hits[0].Relevance*h.Match, h.Relevance, 1e-9, "match = relevance / best")
+		if i > 0 {
+			assert.LessOrEqual(t, h.Match, all.Hits[i-1].Match)
+		}
+	}
+
+	// The reference is the whole search, not the page: page 2 does not start at 100%.
+	second := search(t, repo, domain.SearchQuery{Keyword: "go", Page: 2, PerPage: 2})
+	require.NotEmpty(t, second.Hits)
+	assert.InDelta(t, all.Hits[2].Match, second.Hits[0].Match, 1e-9)
+	assert.Less(t, second.Hits[0].Match, 1.0)
+
+	popular := search(t, repo, domain.SearchQuery{Keyword: "go", Sort: domain.SortPopularity})
+	assert.Zero(t, popular.Hits[0].Match, "only relevance sorting computes it")
+}
