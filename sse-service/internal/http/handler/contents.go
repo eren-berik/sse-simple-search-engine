@@ -20,6 +20,7 @@ import (
 type Searcher interface {
 	Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, search.CacheStatus, error)
 	Get(ctx context.Context, id int64) (domain.Content, scoring.Breakdown, error)
+	ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error)
 }
 
 type ContentHandler struct {
@@ -31,13 +32,15 @@ func NewContentHandler(svc Searcher) *ContentHandler {
 }
 
 type contentDTO struct {
-	ID          int64          `json:"id"`
-	Provider    string         `json:"provider"`
-	ExternalID  string         `json:"external_id"`
-	Title       string         `json:"title"`
-	Type        string         `json:"type"`
-	Score       float64        `json:"score"`
-	Relevance   *float64       `json:"relevance,omitempty"`
+	ID         int64    `json:"id"`
+	Provider   string   `json:"provider"`
+	ExternalID string   `json:"external_id"`
+	Title      string   `json:"title"`
+	Type       string   `json:"type"`
+	Score      float64  `json:"score"`
+	Relevance  *float64 `json:"relevance,omitempty"`
+	// Match is the relevance as a percentage of the search's best match (100); only when sorted by relevance.
+	Match       *int           `json:"match,omitempty"`
 	Metrics     domain.Metrics `json:"metrics"`
 	Tags        []string       `json:"tags"`
 	PublishedAt time.Time      `json:"published_at"`
@@ -46,6 +49,59 @@ type contentDTO struct {
 type contentDetailDTO struct {
 	contentDTO
 	ScoreBreakdown scoring.Breakdown `json:"score_breakdown"`
+	// RelevanceBreakdown is present when the detail was requested with ?q=.
+	RelevanceBreakdown *relevanceDTO `json:"relevance_breakdown,omitempty"`
+}
+
+type relevanceDTO struct {
+	Query          string        `json:"query"`
+	Matches        bool          `json:"matches"`
+	Kind           string        `json:"kind"` // "full_text", "partial" or "none"
+	Terms          []termDTO     `json:"terms"`
+	TitleWeight    float64       `json:"title_weight"`
+	TagWeight      float64       `json:"tag_weight"`
+	Rank           float64       `json:"rank"`
+	Steps          []rankStepDTO `json:"rank_steps"`
+	RankNormalizer float64       `json:"rank_normalizer"`
+	WordSimilarity float64       `json:"word_similarity"`
+	PartialFactor  float64       `json:"partial_factor"`
+	Relevance      float64       `json:"relevance"`
+}
+
+type termDTO struct {
+	Term    string `json:"term"`
+	InTitle int    `json:"in_title"`
+	InTags  int    `json:"in_tags"`
+}
+
+type rankStepDTO struct {
+	Field    string  `json:"field"`
+	Weight   float64 `json:"weight"`
+	Position int     `json:"position"`
+	Value    float64 `json:"value"`
+}
+
+func toRelevanceDTO(e domain.RelevanceExplanation) *relevanceDTO {
+	kind := "none"
+	switch {
+	case e.FullText:
+		kind = "full_text"
+	case e.Matches:
+		kind = "partial"
+	}
+	dto := &relevanceDTO{
+		Query: e.Query, Matches: e.Matches, Kind: kind, Terms: []termDTO{}, Steps: []rankStepDTO{},
+		TitleWeight: e.TitleWeight, TagWeight: e.TagWeight, Rank: round(e.Rank, 4),
+		RankNormalizer: round(domain.RankNormalizer, 4), WordSimilarity: round(e.WordSimilarity, 4),
+		PartialFactor: e.PartialFactor, Relevance: round(e.Relevance, 4),
+	}
+	for _, t := range e.Terms {
+		dto.Terms = append(dto.Terms, termDTO{Term: t.Term, InTitle: t.InTitle, InTags: t.InTags})
+	}
+	for _, s := range e.Steps {
+		dto.Steps = append(dto.Steps, rankStepDTO{Field: s.Field, Weight: s.Weight, Position: s.Position, Value: round(s.Value, 4)})
+	}
+	return dto
 }
 
 type listMeta struct {
@@ -54,6 +110,8 @@ type listMeta struct {
 	Total      int    `json:"total"`
 	TotalPages int    `json:"total_pages"`
 	Sort       string `json:"sort"`
+	// BestRelevance is the relevance of the search's best match, the 100% of every match.
+	BestRelevance *float64 `json:"best_relevance,omitempty"`
 }
 
 // List handles GET /api/v1/contents.
@@ -99,12 +157,19 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 		if res.Sort == domain.SortRelevance {
 			r := round(hit.Relevance, 4)
 			dto.Relevance = &r
+			m := int(math.Round(hit.Match * 100))
+			dto.Match = &m
 		}
 		items = append(items, dto)
 	}
-	return httpx.OK(c, items, listMeta{
+	meta := listMeta{
 		Page: res.Page, PerPage: res.PerPage, Total: res.Total, TotalPages: res.TotalPages(), Sort: string(res.Sort),
-	})
+	}
+	if res.Sort == domain.SortRelevance && res.BestRelevance > 0 {
+		best := round(res.BestRelevance, 4)
+		meta.BestRelevance = &best
+	}
+	return httpx.OK(c, items, meta)
 }
 
 // Get handles GET /api/v1/contents/:id.
@@ -117,7 +182,15 @@ func (h *ContentHandler) Get(c *fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	return httpx.OK(c, contentDetailDTO{contentDTO: toDTO(content), ScoreBreakdown: roundBreakdown(breakdown)}, nil)
+	dto := contentDetailDTO{contentDTO: toDTO(content), ScoreBreakdown: roundBreakdown(breakdown)}
+	if keyword := c.Query("q"); keyword != "" {
+		explanation, err := h.svc.ExplainRelevance(c.UserContext(), id, keyword)
+		if err != nil {
+			return err
+		}
+		dto.RelevanceBreakdown = toRelevanceDTO(explanation)
+	}
+	return httpx.OK(c, dto, nil)
 }
 
 // roundBreakdown trims floating-point noise (0.0800000001) from the score and every step of

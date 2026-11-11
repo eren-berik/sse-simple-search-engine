@@ -246,7 +246,11 @@ Provider'lara giden istekler gateway'den geçmez. Onların rate limit, retry ve 
 
 Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüz (HTML, CSS, vanilla JS). Gateway binary'sine gömülü; açık ve koyu temayı sistem ayarına göre seçiyor ve telefon genişliğinde de çalışıyor.
 
-- **Sonuç listesi:** Her içerik bir satır kartında gösteriliyor: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Sağda skor ve aynı sayfadaki en yüksek skora göre bir çubuk var. Alakalılık sıralamasında alakalılık puanı da görünüyor.
+- **Sonuç listesi:** Her içerik bir satır kartında gösteriliyor: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Kartın sağında, listenin neye göre sıralandığı öne çıkıyor:
+  - **Popülerlik sıralamasında** büyük puntoyla skor.
+  - **Alakalılık sıralamasında** dairesel bir eşleşme göstergesi ("%97", "Güçlü / Orta / Zayıf eşleşme"). Skor küçük bir "Skor 298,25" etiketine iniyor.
+
+  İki sayı hiçbir zaman aynı biçimde gösterilmiyor, bu yüzden birbirine karışmıyor.
 - **Metrikler tek bakışta:** Her kartta dört metrik sütunu var. Sütunlar her satırda aynı yerde durduğu için değerler alt alta karşılaştırılabiliyor:
 
   | | 1 | 2 | 3 | 4 |
@@ -291,7 +295,7 @@ Kimlik yönetimi ile içerik araması farklı hızlarda değişen, farklı güve
 |---|---|
 | Kalıcı veri tutarlılığı | ACID transaction'lar; `UNIQUE (provider, external_id)`, `CHECK` ve `contents → providers` foreign key kısıtları. Provider batch'i tek transaction'da upsert edilir |
 | Anahtar kelime araması | Başlık (ağırlık A) ve etiketler (ağırlık B) üzerinde `tsvector` generated column + GIN index |
-| Alakalılık skoru | `ts_rank` ve `pg_trgm similarity` toplamı |
+| Alakalılık skoru | Tam kelime eşleşmesinde ağırlıklı `ts_rank`, kelime parçasında `pg_trgm word_similarity` |
 | Kısmi eşleşme ("kubern" → Kubernetes) | `pg_trgm` GIN index ile `ILIKE` |
 | Popülerliğe göre sıralama | Önceden hesaplanmış `score` kolonu + `(type, score DESC)` index'i |
 | Token rotasyonu | Tek bir koşullu `UPDATE` ile atomik "tüket" işlemi |
@@ -434,7 +438,24 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
   - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
 - **Sıralama:**
   - `popularity`: `score DESC`
-  - `relevance`: `ts_rank + similarity DESC`
+  - `relevance`: Yalnızca gerçek eşleşmeyi puanlar.
+    - **Tam kelime eşleşmesi:** Ağırlıklı `ts_rank` ile puanlanır; başlık 1,0, etiket 0,8. Başlıkta geçen kelime etikette geçenden, ikisinde birden geçen de tekinden daha yüksek puan alır. Örneğin "programming" araması: başlığında ve etiketinde geçen %100, yalnızca etiketinde geçen dört içerik eşit şekilde %67.
+    - **Kelimenin yalnızca bir parçası geçiyorsa** (ör. "kuberne"): `word_similarity` kullanılır, 0,4 ile ölçeklenir; böylece her zaman tam eşleşmelerin altında kalır.
+    - **Eşitlikte** popülerlik skoru belirler; aynı şekilde eşleşen içeriklerden daha değerli olan öne çıkar.
+    - **Neden başlık benzerliği eklenmiyor:** İlk sürümde `similarity(title, q)` de ekleniyordu. Bu kısa başlıkları ödüllendiriyor ve harf tesadüflerine puan veriyordu: "testing" ile "programming" ortak "ing" içerdiği için aynı şekilde eşleşen içerikler %21 ile %31 arasına saçılıyordu.
+  - Ham değer kullanıcıya bir şey ifade etmediği için yanıtta ayrıca `match` döner: alakalılığın, aramanın **en iyi sonucuna göre yüzdesi** (en iyisi 100).
+    - Referans sayfa değil bütün aramadır: 2. sayfadaki bir sonuç da aynı ölçekte görünür.
+    - **1. sayfada** en iyi sonuç zaten listenin ilk satırıdır; ek bir şey hesaplanmaz.
+    - **Sonraki sayfalarda** en iyi değer `max(relevance) OVER ()` ile bulunur. Bu, çok satırla eşleşen aramalarda sorguyu %20–50 uzatır (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)); bu yüzden yalnızca orada eklenir.
+    - Popülerlik sıralamasında hesaplanmaz, böylece onun index planı korunur.
+  - **Alakalılık kırılımı:** `GET /api/v1/contents/{id}?q=programming`, skor kırılımına ek olarak `relevance_breakdown` döndürür; dashboard alakalılık sıralı bir listeden açılan detayda bunu gösterir:
+    - Aranan her kelime başlıkta ve etikette kaç kez geçiyor.
+    - Tek kelimelik aramada `ts_rank`'in kendi aritmetiği: eşleşmeler ağırlığa göre sıralanır, n'inci eşleşme `ağırlık ÷ n²` katkı yapar, toplam π²/6'ya bölünür. Örnek: başlık + etiket → (1 ÷ 1² + 0,8 ÷ 2²) ÷ 1,6449 = 0,7295.
+    - Birden fazla kelimede PostgreSQL kelimelerin birbirine yakınlığını da hesaba kattığı için yalnızca sonuç gösterilir. Kısmi eşleşmede `word_similarity × 0,4`.
+    - Son olarak yüzde: bu içerik ÷ aramanın en iyi sonucu. Arama yanıtı bu referansı `meta.best_relevance` olarak verir.
+
+    Açıklama, sıralamayı yapan SQL'den gelir. Testler, adımların PostgreSQL'in `ts_rank` sonucunu birebir verdiğini doğrular.
+    - Mutlak bir ölçek (ör. `ts_rank` normalizasyonu) seçilmedi: başlığında tam aranan kelime geçen bir içerik bile ~%25 çıkıp "kötü eşleşme" gibi görünüyordu.
   - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity.
   - Anahtar kelime olmadan istenen relevance, popularity'ye düşer. `meta.sort` hangisinin kullanıldığını bildirir; dashboard da bunu bir uyarıyla gösterir.
 - **Sayfalama:** offset/limit. Yanıtta `meta{page, per_page, total, total_pages, sort}` döner.

@@ -200,3 +200,18 @@ func TestWarmingFailuresDoNotFailInvalidation(t *testing.T) {
 
 	assert.NoError(t, svc.Invalidate(context.Background()))
 }
+
+func (f *fakeRepo) ExplainRelevance(_ context.Context, _ int64, keyword string) (domain.RelevanceExplanation, error) {
+	return domain.RelevanceExplanation{Query: keyword}, nil
+}
+
+func TestExplainRelevanceNormalizesTheKeyword(t *testing.T) {
+	svc := newService(&fakeRepo{}, cache.NewMemory())
+
+	e, err := svc.ExplainRelevance(context.Background(), 1, "  go   testing ")
+	require.NoError(t, err)
+	assert.Equal(t, "go testing", e.Query, "the same keyword the search ranked with")
+
+	_, err = svc.ExplainRelevance(context.Background(), 1, "   ")
+	assert.ErrorIs(t, err, domain.ErrInvalidInput)
+}

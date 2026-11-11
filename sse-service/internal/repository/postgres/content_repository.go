@@ -151,9 +151,31 @@ func (r *ContentRepository) RecalculateScores(ctx context.Context, before time.T
 	return updated, nil
 }
 
+// relevanceSQL scores how well a row matches @q, rewarding real matches only:
+//   - a whole-word match is ranked by ts_rank, with title words (A) weighted 1.0 and tags (B) 0.8,
+//     so a title match beats a tag match and a word in both beats either;
+//   - a match on part of a word only (found by ILIKE, e.g. "kuberne") gets word_similarity,
+//     scaled by 0.4 so it always stays below any whole-word match.
+//
+// Whole-title trigram similarity is deliberately not added: it rewarded short titles and letter
+// coincidences ("testing" shares "ing" with "programming"), which ranked equally good matches apart
+// for no reason. Equal matches are ordered by the popularity score instead.
+var relevanceSQL = fmt.Sprintf(`(CASE
+	WHEN search_vector @@ websearch_to_tsquery('simple', @q)
+		THEN ts_rank('{0.1, 0.2, %[1]g, %[2]g}', search_vector, websearch_to_tsquery('simple', @q))
+	ELSE %[3]g * word_similarity(@q, title)
+END)::float8`, tagWeight, titleWeight, partialFactor)
+
+// Relevance weights, shared by the ranking SQL and its explanation.
+const (
+	titleWeight   = 1.0 // ts_rank weight of title words (A)
+	tagWeight     = 0.8 // ts_rank weight of tag words (B)
+	partialFactor = 0.4 // keeps partial matches below whole-word matches
+)
+
 // Search returns a page of contents matching q.
 // Keyword matching combines full-text search on title and tags with a substring match on the title;
-// relevance is ts_rank plus trigram similarity of the title.
+// relevance is described at relevanceSQL.
 func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, error) {
 	args := pgx.NamedArgs{"limit": q.PerPage, "offset": q.Offset()}
 	// Contents of disabled providers stay stored but are hidden until the provider is enabled again.
@@ -164,7 +186,7 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		args["q"] = q.Keyword
 		args["like"] = "%" + escapeLike(q.Keyword) + "%"
 		conds = append(conds, `(search_vector @@ websearch_to_tsquery('simple', @q) OR title ILIKE @like)`)
-		relevance = `(ts_rank(search_vector, websearch_to_tsquery('simple', @q)) + similarity(title, @q))::float8`
+		relevance = relevanceSQL
 	}
 	if q.Type != "" {
 		args["type"] = string(q.Type)
@@ -205,22 +227,95 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		return result, nil
 	}
 
-	sql := fmt.Sprintf(`SELECT %s, %s AS relevance FROM contents %s ORDER BY %s LIMIT @limit OFFSET @offset`,
-		contentColumns, relevance, where, orderBy)
+	// The match ratio is relative to the best result of the whole search, not of this page. On
+	// page 1 that is simply the first row; later pages need max(...) OVER (), which costs ~20-50%
+	// more on searches matching many rows (see scripts/search-benchmark), so it is only added there.
+	// Popularity sorting needs neither and keeps its index-only plan.
+	bestSQL := "0::float8"
+	if q.Sort == domain.SortRelevance && q.Offset() > 0 {
+		bestSQL = "max(relevance) OVER ()"
+	}
+	sql := fmt.Sprintf(`SELECT *, %s AS best FROM (SELECT %s, %s AS relevance FROM contents %s) hits
+		ORDER BY %s LIMIT @limit OFFSET @offset`,
+		bestSQL, contentColumns, relevance, where, orderBy)
 	rows, err := r.pool.Query(ctx, sql, args)
 	if err != nil {
 		return domain.SearchResult{}, fmt.Errorf("search contents: %w", err)
 	}
+	var best float64 // the search's best relevance, the same on every row
 	hits, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.SearchHit, error) {
 		var h domain.SearchHit
-		err := row.Scan(append(contentDest(&h.Content), &h.Relevance)...)
+		err := row.Scan(append(contentDest(&h.Content), &h.Relevance, &best)...)
 		return h, err
 	})
 	if err != nil {
 		return domain.SearchResult{}, fmt.Errorf("scan contents: %w", err)
 	}
+	if q.Sort == domain.SortRelevance {
+		if q.Offset() == 0 {
+			best = hits[0].Relevance
+		}
+		result.BestRelevance = best
+		for i := range hits {
+			if best > 0 {
+				hits[i].Match = hits[i].Relevance / best
+			}
+		}
+	}
 	result.Hits = hits
 	return result, nil
+}
+
+// ExplainRelevance explains a listed item's relevance for keyword with the same SQL that ranks
+// search results; it returns domain.ErrNotFound if the item is not listed.
+func (r *ContentRepository) ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error) {
+	e := domain.RelevanceExplanation{
+		Query: keyword, TitleWeight: titleWeight, TagWeight: tagWeight, PartialFactor: partialFactor,
+	}
+	// hits lists, for every searched word the item contains, the weights of its occurrences
+	// ("programming:AB" = once in the title, once in the tags), read from the search vector.
+	var hits []string
+	var terms []string
+	err := r.pool.QueryRow(ctx, `
+		WITH q AS (SELECT websearch_to_tsquery('simple', @q) AS tsq, to_tsvector('simple', @q) AS words)
+		SELECT
+			search_vector @@ q.tsq OR title ILIKE @like,
+			search_vector @@ q.tsq,
+			ts_rank('{0.1, 0.2, `+fmt.Sprintf("%g, %g", tagWeight, titleWeight)+`}', search_vector, q.tsq)::float8,
+			word_similarity(@q, title)::float8,
+			`+relevanceSQL+`,
+			ARRAY(SELECT lexeme FROM unnest(q.words) ORDER BY positions[1]),
+			ARRAY(SELECT u.lexeme || ':' || array_to_string(u.weights, '')
+			      FROM unnest(search_vector) u WHERE u.lexeme = ANY(tsvector_to_array(q.words)))
+		FROM contents, q
+		WHERE id = @id AND `+listedCond,
+		pgx.NamedArgs{"id": id, "q": keyword, "like": "%" + escapeLike(keyword) + "%"},
+	).Scan(&e.Matches, &e.FullText, &e.Rank, &e.WordSimilarity, &e.Relevance, &terms, &hits)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.RelevanceExplanation{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.RelevanceExplanation{}, fmt.Errorf("explain relevance: %w", err)
+	}
+
+	found := map[string]domain.TermMatch{}
+	for _, h := range hits {
+		term, weights, _ := strings.Cut(h, ":")
+		found[term] = domain.TermMatch{
+			Term: term, InTitle: strings.Count(weights, "A"), InTags: strings.Count(weights, "B"),
+		}
+	}
+	for _, t := range terms {
+		m, ok := found[t]
+		if !ok {
+			m = domain.TermMatch{Term: t}
+		}
+		e.Terms = append(e.Terms, m)
+	}
+	if e.FullText && len(e.Terms) == 1 {
+		e.Steps, _ = domain.RankSteps(e.Terms[0], titleWeight, tagWeight)
+	}
+	return e, nil
 }
 
 // GetByID returns a single content item, or domain.ErrNotFound if it does not exist or its provider is disabled.

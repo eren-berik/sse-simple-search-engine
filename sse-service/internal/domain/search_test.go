@@ -82,3 +82,29 @@ func day(s string) time.Time {
 	}
 	return t
 }
+
+func TestRankStepsReproduceTsRank(t *testing.T) {
+	// Values PostgreSQL returns for ts_rank('{0.1, 0.2, 0.8, 1.0}', ...) on a single word.
+	tests := []struct {
+		name  string
+		term  TermMatch
+		want  float64
+		steps []RankStep
+	}{
+		{"title only", TermMatch{InTitle: 1}, 0.6079, []RankStep{{"title", 1, 1, 1}}},
+		{"tags only", TermMatch{InTags: 1}, 0.4863, []RankStep{{"tags", 0.8, 1, 0.8}}},
+		{"title and tags", TermMatch{InTitle: 1, InTags: 1}, 0.7295, []RankStep{{"title", 1, 1, 1}, {"tags", 0.8, 2, 0.2}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps, rank := RankSteps(tt.term, 1, 0.8)
+			assert.InDelta(t, tt.want, rank, 1e-4)
+			assert.Equal(t, len(tt.steps), len(steps))
+			for i := range tt.steps {
+				assert.Equal(t, tt.steps[i].Field, steps[i].Field)
+				assert.Equal(t, tt.steps[i].Position, steps[i].Position)
+				assert.InDelta(t, tt.steps[i].Value, steps[i].Value, 1e-9)
+			}
+		})
+	}
+}

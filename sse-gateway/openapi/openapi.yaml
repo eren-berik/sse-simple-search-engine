@@ -215,6 +215,7 @@ paths:
       summary: Get a content item with its score breakdown
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64, minimum: 1 } }
+        - { name: q, in: query, schema: { type: string, maxLength: 200 }, example: programming, description: 'A search keyword; adds relevance_breakdown, explaining how the item matched that search' }
       responses:
         '200':
           description: The content item
@@ -477,7 +478,8 @@ components:
         title: { type: string, example: Go Programming Tutorial }
         type: { type: string, enum: [video, text] }
         score: { type: number, example: 41.3 }
-        relevance: { type: number, description: Present only when sorted by relevance }
+        relevance: { type: number, description: 'Raw relevance: weighted ts_rank for whole-word matches (title 1.0, tags 0.8), scaled word similarity for partial ones; present only when sorted by relevance' }
+        match: { type: integer, minimum: 0, maximum: 100, example: 97, description: 'Relevance as a percentage of the best match of the whole search (the best is 100, on every page); present only when sorted by relevance' }
         metrics: { $ref: '#/components/schemas/Metrics' }
         tags:
           type: array
@@ -489,6 +491,41 @@ components:
         - $ref: '#/components/schemas/Content'
         - type: object
           properties:
+            relevance_breakdown:
+              type: object
+              description: |
+                Present when requested with ?q=. How the item matched the search, from the same SQL that ranks results:
+                where each word is found, and for a whole-word match the ts_rank steps (weight / position², summed and
+                divided by π²/6; only for single-word searches, since several words also weigh their proximity), or for
+                a partial match word_similarity × partial_factor.
+              properties:
+                query: { type: string }
+                matches: { type: boolean }
+                kind: { type: string, enum: [full_text, partial, none] }
+                terms:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      term: { type: string }
+                      in_title: { type: integer }
+                      in_tags: { type: integer }
+                title_weight: { type: number, example: 1 }
+                tag_weight: { type: number, example: 0.8 }
+                rank: { type: number, example: 0.4863 }
+                rank_steps:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      field: { type: string, enum: [title, tags] }
+                      weight: { type: number }
+                      position: { type: integer }
+                      value: { type: number }
+                rank_normalizer: { type: number, example: 1.6449 }
+                word_similarity: { type: number }
+                partial_factor: { type: number, example: 0.4 }
+                relevance: { type: number }
             score_breakdown:
               type: object
               properties:
@@ -545,6 +582,7 @@ components:
         total: { type: integer }
         total_pages: { type: integer }
         sort: { type: string, enum: [popularity, relevance] }
+        best_relevance: { type: number, description: 'Relevance of the best match of the whole search, the reference (100) of every match; only when sorted by relevance' }
 
     SyncRun:
       type: object

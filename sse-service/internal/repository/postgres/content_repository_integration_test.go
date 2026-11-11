@@ -370,3 +370,128 @@ func TestRecalculateScoresWritesOnlyChangedScores(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT score FROM contents WHERE provider = 'provider1' AND external_id = 'v1'`).Scan(&score))
 	assert.InDelta(t, original-5, score, 1e-9)
 }
+
+func TestRelevanceMatchIsRelativeToTheBestResult(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	// "programming" is in one title (and its tags) and in four other items' tags only.
+	all := search(t, repo, domain.SearchQuery{Keyword: "programming", PerPage: 100})
+	require.Len(t, all.Hits, 5)
+	assert.Equal(t, "Go Programming Tutorial", all.Hits[0].Content.Title)
+	assert.InDelta(t, 1.0, all.Hits[0].Match, 1e-9, "the best result is the reference")
+	for i, h := range all.Hits {
+		assert.InDelta(t, all.Hits[0].Relevance*h.Match, h.Relevance, 1e-9, "match = relevance / best")
+		if i > 0 {
+			assert.LessOrEqual(t, h.Match, all.Hits[i-1].Match)
+		}
+	}
+
+	// The reference is the whole search, not the page: page 2 does not start at 100%.
+	second := search(t, repo, domain.SearchQuery{Keyword: "programming", Page: 2, PerPage: 2})
+	require.NotEmpty(t, second.Hits)
+	assert.InDelta(t, all.Hits[2].Match, second.Hits[0].Match, 1e-9)
+	assert.Less(t, second.Hits[0].Match, 1.0)
+
+	popular := search(t, repo, domain.SearchQuery{Keyword: "programming", Sort: domain.SortPopularity})
+	assert.Zero(t, popular.Hits[0].Match, "only relevance sorting computes it")
+}
+
+func TestRelevanceRewardsRealMatchesOnly(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+	matches := func(q string) map[string]float64 {
+		out := map[string]float64{}
+		for _, h := range search(t, repo, domain.SearchQuery{Keyword: q, PerPage: 100}).Hits {
+			out[h.Content.Title] = h.Match
+		}
+		return out
+	}
+
+	// Tag-only matches are equal, whatever letters their titles happen to share with the query,
+	// and rank below the title match but well above a third of it.
+	p := matches("programming")
+	tagOnly := p["Go Testing Best Practices"]
+	for _, title := range []string{"Clean Architecture in Go", "Advanced Go Concurrency Patterns", "Building RESTful APIs with Go"} {
+		assert.InDelta(t, tagOnly, p[title], 1e-9, title)
+	}
+	assert.Greater(t, tagOnly, 0.6)
+	assert.Less(t, tagOnly, 1.0)
+
+	// Same kind of match, same percentage; ties are ordered by popularity.
+	res := search(t, repo, domain.SearchQuery{Keyword: "go", PerPage: 100})
+	for _, h := range res.Hits {
+		assert.InDelta(t, 1.0, h.Match, 1e-9, h.Content.Title)
+	}
+	assert.Equal(t, "Clean Architecture in Go", res.Hits[0].Content.Title, "the most popular of equal matches comes first")
+
+	// A match on part of a word only still ranks below whole-word matches.
+	mixed := search(t, repo, domain.SearchQuery{Keyword: "test", PerPage: 100})
+	require.NotEmpty(t, mixed.Hits)
+	assert.Equal(t, "Go Testing Best Practices", mixed.Hits[0].Content.Title)
+}
+
+func TestExplainRelevanceMatchesTheRanking(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+	ctx := context.Background()
+	ranked := map[string]domain.SearchHit{}
+	for _, h := range search(t, repo, domain.SearchQuery{Keyword: "programming", PerPage: 100}).Hits {
+		ranked[h.Content.Title] = h
+	}
+
+	for title, want := range map[string]domain.TermMatch{
+		"Go Programming Tutorial":   {Term: "programming", InTitle: 1, InTags: 1},
+		"Go Testing Best Practices": {Term: "programming", InTags: 1},
+	} {
+		hit := ranked[title]
+		e, err := repo.ExplainRelevance(ctx, hit.Content.ID, "programming")
+		require.NoError(t, err)
+		assert.True(t, e.Matches, title)
+		assert.True(t, e.FullText, title)
+		assert.Equal(t, []domain.TermMatch{want}, e.Terms, title)
+		assert.InDelta(t, hit.Relevance, e.Relevance, 1e-9, "%s: the explanation is the ranking's relevance", title)
+
+		// The steps reproduce PostgreSQL's ts_rank.
+		var sum float64
+		for _, s := range e.Steps {
+			sum += s.Value
+		}
+		assert.InDelta(t, e.Rank, sum/domain.RankNormalizer, 1e-6, title)
+	}
+
+	// A partial match is explained by word similarity.
+	kube := search(t, repo, domain.SearchQuery{Keyword: "kuberne"}).Hits[0]
+	e, err := repo.ExplainRelevance(ctx, kube.Content.ID, "kuberne")
+	require.NoError(t, err)
+	assert.True(t, e.Matches)
+	assert.False(t, e.FullText)
+	assert.Empty(t, e.Steps)
+	assert.InDelta(t, kube.Relevance, e.PartialFactor*e.WordSimilarity, 1e-6)
+
+	// Several words: where each is found, no single-word steps.
+	gt := search(t, repo, domain.SearchQuery{Keyword: "go testing"}).Hits[0]
+	e, err = repo.ExplainRelevance(ctx, gt.Content.ID, "go testing")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"go", "testing"}, []string{e.Terms[0].Term, e.Terms[1].Term}, "in query order")
+	assert.Empty(t, e.Steps)
+
+	// An item that does not match the search.
+	docker := search(t, repo, domain.SearchQuery{Keyword: "docker"}).Hits[0]
+	e, err = repo.ExplainRelevance(ctx, docker.Content.ID, "programming")
+	require.NoError(t, err)
+	assert.False(t, e.Matches)
+
+	_, err = repo.ExplainRelevance(ctx, 999999, "go")
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestSearchReportsTheBestRelevance(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	first := search(t, repo, domain.SearchQuery{Keyword: "programming", PerPage: 2})
+	second := search(t, repo, domain.SearchQuery{Keyword: "programming", Page: 2, PerPage: 2})
+	assert.InDelta(t, first.Hits[0].Relevance, first.BestRelevance, 1e-9)
+	assert.InDelta(t, first.BestRelevance, second.BestRelevance, 1e-9, "the same reference on every page")
+}

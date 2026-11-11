@@ -17,6 +17,7 @@
   // international product, so counts are written in full below a million ("1,2 Mn" above).
   const fmtCount = (v) => (v >= 1e6 ? fmtCompact : fmtNumber).format(v);
   const fmtPercent = new Intl.NumberFormat("tr-TR", { style: "percent", maximumFractionDigits: 1 });
+  const fmtRelevance = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 4 });
 
   // Each type shows four metric columns in the same positions, so rows can be compared at a
   // glance. The fourth is the engagement ratio the score formula uses.
@@ -251,6 +252,7 @@
     $("provider").replaceChildren(new Option("Tümü", ""));
     state.page = 1;
     state.totalPages = 0;
+    state.ranked = null;
     $("results").replaceChildren();
     $("pager").replaceChildren();
     $("summary").textContent = "";
@@ -329,7 +331,8 @@
   }
 
   // ---------------------------------------------------------------- contents
-  const state = { page: 1, totalPages: 0 };
+  // ranked holds the last relevance-sorted search, so the detail dialog can explain the match.
+  const state = { page: 1, totalPages: 0, ranked: null };
 
   function el(tag, className, text) {
     const node = document.createElement(tag);
@@ -355,7 +358,41 @@
     return box;
   }
 
-  function renderItem(item, rank, maxScore, showRelevance) {
+  // Match levels for the relevance view; the best result of a search is always 100%.
+  const matchLevel = (pct) =>
+    pct >= 90 ? { label: "Güçlü eşleşme", tone: "strong" }
+      : pct >= 60 ? { label: "Orta eşleşme", tone: "medium" }
+        : { label: "Zayıf eşleşme", tone: "weak" };
+
+  // The card's right side shows what the list is sorted by: the score for popularity, a match
+  // gauge for relevance (with the score kept as a small secondary figure). The two numbers never
+  // share a style, so they are not mistaken for each other.
+  function rankingBox(item, ranked) {
+    const box = el("div", "score");
+    if (!ranked) {
+      box.title = "Popülerlik skoru: etkileşim, güncellik ve içerik türünden hesaplanır.";
+      box.append(el("span", "score-value", fmtNumber.format(item.score)), el("span", "score-label", "Skor"));
+      return box;
+    }
+    const pct = item.match ?? 0;
+    const level = matchLevel(pct);
+    box.classList.add("match", level.tone);
+    box.title = "Eşleşme, bu aramanın en iyi sonucuna göre yüzdedir: kelimenin başlıkta ve etiketlerde geçmesine ve başlığın aramaya yakınlığına göre hesaplanır.";
+    const gauge = el("div", "gauge");
+    const r = 15;
+    const c = 2 * Math.PI * r;
+    gauge.innerHTML = `<svg viewBox="0 0 36 36" width="40" height="40" aria-hidden="true">
+      <circle cx="18" cy="18" r="${r}" class="gauge-track"/>
+      <circle cx="18" cy="18" r="${r}" class="gauge-fill" stroke-dasharray="${(c * pct) / 100} ${c}"/></svg>`;
+    const text = el("div", "match-text");
+    text.append(el("span", "match-value", `%${pct}`), el("span", "match-label", level.label));
+    const head = el("div", "match-head");
+    head.append(gauge, text);
+    box.append(head, el("span", "score-chip", `Skor ${fmtNumber.format(item.score)}`));
+    return box;
+  }
+
+  function renderItem(item, rank, ranked) {
     const li = el("li", "item");
     li.tabIndex = 0;
     li.setAttribute("aria-label", `${item.title}, skor ${fmtNumber.format(item.score)}`);
@@ -370,14 +407,7 @@
     const metrics = el("div", "metrics");
     for (const column of metricColumns[item.type] || []) metrics.append(metricCell(column, item.metrics));
 
-    const score = el("div", "score");
-    const bar = el("div", "score-bar");
-    const fill = el("span");
-    fill.style.width = `${Math.max(4, (item.score / maxScore) * 100)}%`;
-    bar.append(fill);
-    bar.title = "Bu sayfadaki en yüksek skora göre";
-    score.append(el("span", "score-value", fmtNumber.format(item.score)), el("span", "score-label", "Skor"), bar);
-    if (showRelevance) score.append(el("span", "relevance", `Alakalılık ${fmtNumber.format(item.relevance ?? 0)}`));
+    const score = rankingBox(item, ranked);
 
     li.append(el("span", "rank", `#${rank}`), typeIcon(item.type), main, metrics, score);
     li.addEventListener("click", () => openDetail(item.id));
@@ -413,14 +443,16 @@
   function renderContents(items, meta) {
     const list = $("results");
     list.replaceChildren();
-    const showRelevance = meta.sort === "relevance";
+    const ranked = meta.sort === "relevance";
+    state.ranked = ranked ? { q: $("q").value.trim(), best: meta.best_relevance } : null;
     // The API falls back to popularity when relevance is requested without a keyword; say so.
-    $("sort-hint").hidden = !($("sort").value === "relevance" && !showRelevance);
+    $("sort-hint").hidden = !($("sort").value === "relevance" && !ranked);
 
     const summary = $("summary");
     summary.replaceChildren();
     if (meta.total) {
       summary.append(el("strong", "", fmtNumber.format(meta.total)), ` sonuç · ${sortLabels[meta.sort] || meta.sort} sıralaması`);
+      if (ranked) summary.append(el("span", "summary-note", " · eşleşme, en iyi sonuca göre yüzde"));
     }
 
     if (items.length === 0) {
@@ -429,9 +461,8 @@
       list.append(empty);
     }
 
-    const maxScore = Math.max(...items.map((i) => i.score), 1);
     const offset = (meta.page - 1) * meta.per_page;
-    items.forEach((item, i) => list.append(renderItem(item, offset + i + 1, maxScore, showRelevance)));
+    items.forEach((item, i) => list.append(renderItem(item, offset + i + 1, ranked)));
 
     state.totalPages = meta.total_pages;
     renderPager(meta.page, meta.total_pages);
@@ -508,9 +539,11 @@
   };
   const n = (v) => fmtNumber.format(v);
 
+  // calcRow shows label, the calculation and its result; a string value is shown as is.
   function calcRow(label, expr, value, className = "") {
     const row = el("div", `calc-row ${className}`.trim());
-    row.append(el("span", "calc-label", label), el("span", "calc-expr", expr), el("span", "calc-val", n(value)));
+    const shown = typeof value === "string" ? value : n(value);
+    row.append(el("span", "calc-label", label), el("span", "calc-expr", expr), el("span", "calc-val", shown));
     return row;
   }
 
@@ -522,6 +555,77 @@
     head.append(swatch, el("h4", "", title), el("strong", "", n(value)));
     block.append(head);
     return block;
+  }
+
+  const fieldNames = { title: "başlık", tags: "etiket" };
+  const relevanceColor = "#8b5cf6";
+
+  // renderRelevanceExplanation shows how the item matched the search it was opened from: where
+  // each word was found, how that became the relevance and how the relevance became a percentage
+  // of the best result. Like the score, the steps come from the API that ranks the results.
+  function renderRelevanceExplanation(r) {
+    const card = $("detail-relevance");
+    card.hidden = !r;
+    if (!r) return;
+    const body = $("detail-relevance-body");
+    // Relevance values are small; four decimals keep the arithmetic readable (1,2 ÷ 1,6449 = 0,7295).
+    const r4 = (v) => fmtRelevance.format(v);
+    body.replaceChildren();
+
+    const best = state.ranked?.best;
+    const pct = best ? Math.round((r.relevance / best) * 100) : null;
+    const level = pct === null ? null : matchLevel(pct);
+    card.style.setProperty("--tone", level?.tone === "strong" ? "var(--good)" : level?.tone === "weak" ? "#d97706" : "var(--accent)");
+    $("detail-match").textContent = pct === null ? r4(r.relevance) : `%${pct}`;
+
+    if (!r.matches) {
+      body.append(el("p", "calc-note", `Bu içerik "${r.query}" aramasıyla eşleşmiyor.`));
+      return;
+    }
+
+    // Where the searched words are.
+    const where = explainBlock(relevanceColor, `"${r.query}" nerede geçiyor?`, r.relevance);
+    where.querySelector("strong").remove();
+    for (const t of r.terms) {
+      const row = el("div", "term-row");
+      row.append(el("span", "term-word", t.term),
+        el("span", `where ${t.in_title ? "hit" : ""}`.trim(), t.in_title ? `Başlıkta ${t.in_title} kez` : "Başlıkta yok"),
+        el("span", `where ${t.in_tags ? "hit" : ""}`.trim(), t.in_tags ? `Etikette ${t.in_tags} kez` : "Etikette yok"));
+      where.append(row);
+    }
+    if (r.kind === "partial") {
+      where.append(el("p", "calc-note", "Kelimenin tamamı geçmiyor; yalnızca bir parçası başlıkta bulundu."));
+    }
+
+    // How that became the relevance.
+    const points = explainBlock(relevanceColor, "Alakalılık puanı", r.relevance);
+    points.querySelector("strong").textContent = r4(r.relevance);
+    if (r.kind === "full_text" && r.rank_steps.length) {
+      for (const st of r.rank_steps) {
+        points.append(calcRow(`${st.position}. eşleşme · ${fieldNames[st.field]}`, `${n(st.weight)} ÷ ${st.position}²`, r4(st.value)));
+      }
+      const sum = r.rank_steps.reduce((a, st) => a + st.value, 0);
+      points.append(calcRow("Toplam ÷ π²/6", `${r4(sum)} ÷ ${r4(r.rank_normalizer)}`, r4(r.rank), "sum"));
+      points.append(el("p", "calc-note",
+        `Başlıktaki kelime ${n(r.title_weight)}, etiketteki ${n(r.tag_weight)} ağırlık alır. Aynı kelimenin her ek geçişi azalarak katkı yapar (1, ¼, ⅑…).`));
+    } else if (r.kind === "full_text") {
+      points.append(calcRow("Tam kelime eşleşmesi (ts_rank)", `başlık ${n(r.title_weight)} · etiket ${n(r.tag_weight)}`, r4(r.rank), "sum"));
+      points.append(el("p", "calc-note", "Birden fazla kelimede PostgreSQL kelimelerin birbirine yakınlığını da hesaba katar, bu yüzden adım adım gösterilmez."));
+    } else {
+      points.append(calcRow("Kelime benzerliği", "başlıktaki en yakın kısım", r4(r.word_similarity)));
+      points.append(calcRow("Kısmi eşleşme çarpanı", `${r4(r.word_similarity)} × ${n(r.partial_factor)}`, r4(r.relevance), "sum"));
+      points.append(el("p", "calc-note", "Kısmi eşleşmeler her zaman tam kelime eşleşmelerinin altında kalacak şekilde ölçeklenir."));
+    }
+    body.append(where, points);
+
+    // How the relevance became a percentage.
+    if (pct !== null) {
+      const share = explainBlock(relevanceColor, "Eşleşme yüzdesi", r.relevance);
+      share.querySelector("strong").textContent = `%${pct}`;
+      share.append(calcRow("Bu içerik ÷ aramanın en iyi sonucu", `${r4(r.relevance)} ÷ ${r4(best)}`, `%${pct}`, "sum"));
+      share.append(el("p", "calc-note", `${level.label}. En iyi sonuç her zaman %100'dür.`));
+      body.append(share);
+    }
   }
 
   // renderScoreExplanation shows how every component was derived. The steps come from the
@@ -595,7 +699,9 @@
   async function openDetail(id) {
     const epoch = authEpoch;
     try {
-      const { data } = await api(`/api/v1/contents/${id}`);
+      // From a relevance-sorted list, also ask how this item matched the search.
+      const query = state.ranked ? `?q=${encodeURIComponent(state.ranked.q)}` : "";
+      const { data } = await api(`/api/v1/contents/${id}${query}`);
       if (isStale(epoch)) return;
       const c = data.data;
       const b = c.score_breakdown;
@@ -614,6 +720,7 @@
 
       $("detail-final").textContent = fmtNumber.format(b.final);
       renderScoreExplanation(c);
+      renderRelevanceExplanation(c.relevance_breakdown);
 
       const tags = $("detail-tags");
       tags.replaceChildren(...c.tags.map((t) => tagChip(t, { closeDialog: true })));

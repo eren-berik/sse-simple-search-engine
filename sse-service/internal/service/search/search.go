@@ -24,6 +24,7 @@ import (
 type ContentSearcher interface {
 	Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, error)
 	GetByID(ctx context.Context, id int64) (domain.Content, error)
+	ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error)
 }
 
 // CacheStatus reports how a search was served.
@@ -118,6 +119,19 @@ func (s *Service) Get(ctx context.Context, id int64) (domain.Content, scoring.Br
 		return domain.Content{}, scoring.Breakdown{}, err
 	}
 	return c, s.scorer.Score(c), nil
+}
+
+// ExplainRelevance shows how an item's relevance for keyword was computed. The keyword is
+// normalized like a search's, so the explanation matches the ranking the user saw.
+func (s *Service) ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error) {
+	q := domain.SearchQuery{Keyword: keyword}
+	if err := q.Normalize(); err != nil {
+		return domain.RelevanceExplanation{}, err
+	}
+	if q.Keyword == "" {
+		return domain.RelevanceExplanation{}, fmt.Errorf("%w: a keyword is needed to explain relevance", domain.ErrInvalidInput)
+	}
+	return s.repo.ExplainRelevance(ctx, id, q.Keyword)
 }
 
 // Invalidate makes every cached search stale by bumping the global version embedded in cache keys.
