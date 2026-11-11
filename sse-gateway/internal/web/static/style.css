@@ -449,6 +449,12 @@ dialog::backdrop { background: rgb(10 12 20 / 45%); backdrop-filter: blur(3px); 
   font-size: 13.5px;
 }
 .explain-total .calc-expr { white-space: normal; }
+.relevance-card .score-final { color: var(--tone, var(--accent)); }
+.term-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 4px 0; font-size: 13px; }
+.term-row + .term-row { border-top: 1px dashed var(--border); }
+.term-word { font-weight: 650; margin-right: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.where { padding: 1px 8px; border-radius: 8px; font-size: 12px; border: 1px solid var(--border); color: var(--muted); }
+.where.hit { border-color: var(--good); background: var(--good-soft); color: var(--good); font-weight: 600; }
 .explain-total strong { font-size: 17px; font-variant-numeric: tabular-nums; }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; }
 

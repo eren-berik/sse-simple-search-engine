@@ -448,6 +448,13 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
     - **1. sayfada** en iyi sonuç zaten listenin ilk satırıdır; ek bir şey hesaplanmaz.
     - **Sonraki sayfalarda** en iyi değer `max(relevance) OVER ()` ile bulunur. Bu, çok satırla eşleşen aramalarda sorguyu %20–50 uzatır (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)); bu yüzden yalnızca orada eklenir.
     - Popülerlik sıralamasında hesaplanmaz, böylece onun index planı korunur.
+  - **Alakalılık kırılımı:** `GET /api/v1/contents/{id}?q=programming`, skor kırılımına ek olarak `relevance_breakdown` döndürür; dashboard alakalılık sıralı bir listeden açılan detayda bunu gösterir:
+    - Aranan her kelime başlıkta ve etikette kaç kez geçiyor.
+    - Tek kelimelik aramada `ts_rank`'in kendi aritmetiği: eşleşmeler ağırlığa göre sıralanır, n'inci eşleşme `ağırlık ÷ n²` katkı yapar, toplam π²/6'ya bölünür. Örnek: başlık + etiket → (1 ÷ 1² + 0,8 ÷ 2²) ÷ 1,6449 = 0,7295.
+    - Birden fazla kelimede PostgreSQL kelimelerin birbirine yakınlığını da hesaba kattığı için yalnızca sonuç gösterilir. Kısmi eşleşmede `word_similarity × 0,4`.
+    - Son olarak yüzde: bu içerik ÷ aramanın en iyi sonucu. Arama yanıtı bu referansı `meta.best_relevance` olarak verir.
+
+    Açıklama, sıralamayı yapan SQL'den gelir. Testler, adımların PostgreSQL'in `ts_rank` sonucunu birebir verdiğini doğrular.
     - Mutlak bir ölçek (ör. `ts_rank` normalizasyonu) seçilmedi: başlığında tam aranan kelime geçen bir içerik bile ~%25 çıkıp "kötü eşleşme" gibi görünüyordu.
   - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity.
   - Anahtar kelime olmadan istenen relevance, popularity'ye düşer. `meta.sort` hangisinin kullanıldığını bildirir; dashboard da bunu bir uyarıyla gösterir.
