@@ -981,6 +981,10 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzd�
 |---|---|
 | <img src="docs/images/contents-dark.png" alt="Koyu tema" width="420"> | <img src="docs/images/mobile.png" alt="Telefon" width="210"> |
 
+**Hesap menüsü**
+
+<img src="docs/images/user-menu.png" alt="Hesap menüsü" width="420">
+
 ### Dashboard'da oturum
 
 Token'lar `sessionStorage`'da tutulur: sayfa yenilense de kalır, sekme kapanınca silinir. Bir istek 401 döndüğünde access token sessizce refresh edilip istek tekrarlanır. Aynı anda gelen 401'ler tek bir refresh isteğinde birleştirilir; böylece rotasyona uğramış bir refresh token asla iki kez gönderilmez (gönderilseydi tekrar kullanım tespiti tüm oturumu kapatırdı). Kullanıcı değişince önceki kullanıcının filtreleri, sonuçları ve yarım kalan istekleri temizlenir. Admin'ler "Provider'lar" sekmesini görür; viewer'a bu sekme hiç gösterilmez, sunucu tarafında da reddedilir.
