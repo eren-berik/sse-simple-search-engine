@@ -131,3 +131,9 @@ type ContentCount struct {
 	Type     ContentType
 	Count    int64
 }
+
+// TagCount is a tag and how many listed items carry it.
+type TagCount struct {
+	Name  string
+	Count int
+}

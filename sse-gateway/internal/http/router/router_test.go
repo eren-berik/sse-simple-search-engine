@@ -107,6 +107,7 @@ func TestRoutesToOwningService(t *testing.T) {
 		{http.MethodGet, "/api/v1/auth/me", "iam"},
 		{http.MethodGet, "/api/v1/contents?q=go&type=video", "sse"},
 		{http.MethodGet, "/api/v1/contents/12", "sse"},
+		{http.MethodGet, "/api/v1/tags", "sse"},
 		{http.MethodGet, "/api/v1/providers", "sse"},
 		{http.MethodPatch, "/api/v1/providers/3", "sse"},
 		{http.MethodPost, "/api/v1/providers/3/sync", "sse"},
@@ -160,11 +161,13 @@ func TestEdgeAuthorization(t *testing.T) {
 		// Everything else needs a valid token.
 		{http.MethodGet, "/api/v1/auth/me", "", http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1/contents", "", http.StatusUnauthorized},
+		{http.MethodGet, "/api/v1/tags", "", http.StatusUnauthorized},
 		{http.MethodGet, "/api/v1/providers", "", http.StatusUnauthorized},
 		{http.MethodPost, "/api/v1/sync", "", http.StatusUnauthorized},
 		// Viewers read; writes are for admins.
 		{http.MethodGet, "/api/v1/auth/me", jwtauth.RoleViewer, http.StatusTeapot},
 		{http.MethodGet, "/api/v1/contents/1", jwtauth.RoleViewer, http.StatusTeapot},
+		{http.MethodGet, "/api/v1/tags", jwtauth.RoleViewer, http.StatusTeapot},
 		{http.MethodGet, "/api/v1/providers", jwtauth.RoleViewer, http.StatusTeapot},
 		{http.MethodGet, "/api/v1/sync/runs", jwtauth.RoleViewer, http.StatusTeapot},
 		{http.MethodPost, "/api/v1/providers", jwtauth.RoleViewer, http.StatusForbidden},

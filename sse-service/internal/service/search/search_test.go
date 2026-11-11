@@ -19,10 +19,11 @@ import (
 )
 
 type fakeRepo struct {
-	calls  atomic.Int32
-	delay  time.Duration
-	result domain.SearchResult
-	err    error
+	calls    atomic.Int32
+	tagCalls atomic.Int32
+	delay    time.Duration
+	result   domain.SearchResult
+	err      error
 }
 
 func (f *fakeRepo) Search(_ context.Context, q domain.SearchQuery) (domain.SearchResult, error) {
@@ -31,6 +32,11 @@ func (f *fakeRepo) Search(_ context.Context, q domain.SearchQuery) (domain.Searc
 	res := f.result
 	res.Page, res.PerPage, res.Sort = q.Page, q.PerPage, q.Sort
 	return res, f.err
+}
+
+func (f *fakeRepo) Tags(context.Context) ([]domain.TagCount, error) {
+	f.tagCalls.Add(1)
+	return []domain.TagCount{{Name: "programming", Count: 5}}, f.err
 }
 
 func (f *fakeRepo) GetByID(_ context.Context, id int64) (domain.Content, error) {
@@ -192,6 +198,37 @@ func TestInvalidateWarmsTheCommonSearches(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, CacheMiss, status, "other searches are computed on demand")
 	assert.Equal(t, int32(3), repo.calls.Load())
+
+	_, status, err = svc.Tags(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CacheHit, status, "the tag list is warmed too")
+	assert.Equal(t, int32(1), repo.tagCalls.Load())
+}
+
+func TestTagsAreCachedUntilInvalidated(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := newService(repo, cache.NewMemory())
+	ctx := context.Background()
+
+	tags, status, err := svc.Tags(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CacheMiss, status)
+	assert.Equal(t, []domain.TagCount{{Name: "programming", Count: 5}}, tags)
+
+	tags, status, err = svc.Tags(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CacheHit, status)
+	assert.Equal(t, []domain.TagCount{{Name: "programming", Count: 5}}, tags, "decoded intact from the cache")
+
+	require.NoError(t, svc.Invalidate(ctx))
+	_, status, err = svc.Tags(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CacheMiss, status, "a sync that changed contents refreshes the tags")
+	assert.Equal(t, int32(2), repo.tagCalls.Load())
+
+	_, status, err = newService(repo, failingCache{}).Tags(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, CacheBypass, status, "an unreachable cache falls back to the database")
 }
 
 func TestWarmingFailuresDoNotFailInvalidation(t *testing.T) {

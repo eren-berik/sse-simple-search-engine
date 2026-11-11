@@ -123,3 +123,7 @@ func TestStateCollectorSurvivesDatabaseErrors(t *testing.T) {
 func (fakeSearcher) ExplainRelevance(context.Context, int64, string) (domain.RelevanceExplanation, error) {
 	return domain.RelevanceExplanation{}, nil
 }
+
+func (fakeSearcher) Tags(context.Context) ([]domain.TagCount, search.CacheStatus, error) {
+	return nil, search.CacheMiss, nil
+}

@@ -266,6 +266,26 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 	return result, nil
 }
 
+// Tags returns every tag of the listed items with how many items carry it, most used first.
+func (r *ContentRepository) Tags(ctx context.Context) ([]domain.TagCount, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT tag, count(*) FROM contents, unnest(tags) AS tag
+		WHERE `+listedCond+`
+		GROUP BY tag ORDER BY count(*) DESC, tag`)
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	tags, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.TagCount, error) {
+		var t domain.TagCount
+		err := row.Scan(&t.Name, &t.Count)
+		return t, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list tags: %w", err)
+	}
+	return tags, nil
+}
+
 // ExplainRelevance explains a listed item's relevance for keyword with the same SQL that ranks
 // search results; it returns domain.ErrNotFound if the item is not listed.
 func (r *ContentRepository) ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error) {
