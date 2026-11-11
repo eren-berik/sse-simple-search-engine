@@ -139,7 +139,8 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 		Keyword:       c.Query("q"),
 		Type:          domain.ContentType(c.Query("type")),
 		Provider:      c.Query("provider"),
-		Tag:           c.Query("tag"),
+		Tags:          queryAll(c, "tag"),
+		TagMatch:      domain.TagMatch(c.Query("tag_match")),
 		PublishedFrom: from,
 		PublishedTo:   to,
 		Sort:          domain.SortBy(c.Query("sort")),
@@ -261,6 +262,16 @@ func queryDate(c *fiber.Ctx, key string) (time.Time, error) {
 }
 
 // queryInt parses an optional integer query parameter; absent means 0 (use the default).
+// queryAll returns every value of a repeated query parameter (?tag=a&tag=b), copied out of
+// the request buffer.
+func queryAll(c *fiber.Ctx, key string) []string {
+	var values []string
+	for _, v := range c.Context().QueryArgs().PeekMulti(key) {
+		values = append(values, string(v))
+	}
+	return values
+}
+
 func queryInt(c *fiber.Ctx, key string) (int, error) {
 	v := c.Query(key)
 	if v == "" {

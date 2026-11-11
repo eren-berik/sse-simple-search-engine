@@ -168,7 +168,14 @@ func TestCacheKeyCoversEveryFilter(t *testing.T) {
 	keys := map[string]string{}
 	for name, q := range map[string]domain.SearchQuery{
 		"base": base,
-		"tag":  func() domain.SearchQuery { q := base; q.Tag = "go"; return q }(),
+		"tag":  func() domain.SearchQuery { q := base; q.Tags = []string{"go"}; return q }(),
+		"tags": func() domain.SearchQuery { q := base; q.Tags = []string{"go", "devops"}; return q }(),
+		"all": func() domain.SearchQuery {
+			q := base
+			q.Tags = []string{"go", "devops"}
+			q.TagMatch = domain.TagMatchAll
+			return q
+		}(),
 		"from": func() domain.SearchQuery { q := base; q.PublishedFrom = day; return q }(),
 		"to":   func() domain.SearchQuery { q := base; q.PublishedTo = day; return q }(),
 	} {

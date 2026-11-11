@@ -196,10 +196,15 @@ func (r *ContentRepository) Search(ctx context.Context, q domain.SearchQuery) (d
 		args["provider"] = q.Provider
 		conds = append(conds, `provider = @provider`)
 	}
-	if q.Tag != "" {
-		// Tags are stored lowercase; @> can use the GIN index on tags.
-		args["tag"] = []string{q.Tag}
-		conds = append(conds, `tags @> @tag::text[]`)
+	if len(q.Tags) > 0 {
+		// Tags are stored lowercase. && (shares any) and @> (contains all) can both use the GIN
+		// index on tags.
+		args["tags"] = q.Tags
+		if q.TagMatch == domain.TagMatchAll {
+			conds = append(conds, `tags @> @tags::text[]`)
+		} else {
+			conds = append(conds, `tags && @tags::text[]`)
+		}
 	}
 	if !q.PublishedFrom.IsZero() {
 		args["from"] = q.PublishedFrom

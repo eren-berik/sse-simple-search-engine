@@ -214,7 +214,7 @@ func TestListContents(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "HIT", resp.Header.Get("X-Cache"))
-	assert.Equal(t, domain.SearchQuery{Keyword: "go", Type: domain.ContentTypeVideo, Provider: "provider1", Sort: domain.SortRelevance, Page: 2, PerPage: 10}, s.lastQuery)
+	assert.Equal(t, domain.SearchQuery{Keyword: "go", Type: domain.ContentTypeVideo, Provider: "provider1", TagMatch: domain.TagMatchAny, Sort: domain.SortRelevance, Page: 2, PerPage: 10}, s.lastQuery)
 
 	items := body["data"].([]any)
 	require.Len(t, items, 1)
@@ -231,9 +231,10 @@ func TestListContents(t *testing.T) {
 	assert.NotContains(t, body["data"].([]any)[0].(map[string]any), "relevance")
 	assert.NotContains(t, body["data"].([]any)[0].(map[string]any), "match")
 
-	resp, _ = app.get("/api/v1/contents?tag=DevOps&published_from=2024-03-01&published_to=2024-03-31")
+	resp, _ = app.get("/api/v1/contents?tag=DevOps&tag=go&tag_match=all&published_from=2024-03-01&published_to=2024-03-31")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "devops", s.lastQuery.Tag)
+	assert.Equal(t, []string{"devops", "go"}, s.lastQuery.Tags, "the tag parameter repeats")
+	assert.Equal(t, domain.TagMatchAll, s.lastQuery.TagMatch)
 	assert.Equal(t, time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC), s.lastQuery.PublishedFrom)
 	assert.Equal(t, time.Date(2024, 3, 31, 0, 0, 0, 0, time.UTC), s.lastQuery.PublishedTo)
 }

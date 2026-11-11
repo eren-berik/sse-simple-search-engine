@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,40 +20,58 @@ func TestSearchQueryNormalize(t *testing.T) {
 		{
 			name: "defaults without keyword",
 			in:   SearchQuery{},
-			want: SearchQuery{Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+			want: SearchQuery{TagMatch: TagMatchAny, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
 			name: "defaults to popularity with keyword and collapses whitespace",
 			in:   SearchQuery{Keyword: "  go   concurrency "},
-			want: SearchQuery{Keyword: "go concurrency", Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+			want: SearchQuery{Keyword: "go concurrency", TagMatch: TagMatchAny, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
 			name: "relevance with keyword",
 			in:   SearchQuery{Keyword: "go", Sort: SortRelevance},
-			want: SearchQuery{Keyword: "go", Sort: SortRelevance, Page: 1, PerPage: DefaultPerPage},
+			want: SearchQuery{Keyword: "go", TagMatch: TagMatchAny, Sort: SortRelevance, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
 			name: "relevance without keyword falls back to popularity",
 			in:   SearchQuery{Sort: SortRelevance},
-			want: SearchQuery{Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+			want: SearchQuery{TagMatch: TagMatchAny, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
 			name: "type is case-insensitive",
 			in:   SearchQuery{Type: "VIDEO", Page: 2, PerPage: 5},
-			want: SearchQuery{Type: ContentTypeVideo, Sort: SortPopularity, Page: 2, PerPage: 5},
+			want: SearchQuery{Type: ContentTypeVideo, TagMatch: TagMatchAny, Sort: SortPopularity, Page: 2, PerPage: 5},
 		},
 		{
 			name: "tag is trimmed and lowercased",
-			in:   SearchQuery{Tag: "  DevOps "},
-			want: SearchQuery{Tag: "devops", Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+			in:   SearchQuery{Tags: []string{"  DevOps "}},
+			want: SearchQuery{Tags: []string{"devops"}, TagMatch: TagMatchAny, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+		},
+		{
+			name: "tags are sorted and deduplicated, blanks dropped",
+			in:   SearchQuery{Tags: []string{"go", "DevOps", " ", "devops"}, TagMatch: TagMatchAll},
+			want: SearchQuery{Tags: []string{"devops", "go"}, TagMatch: TagMatchAll, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+		},
+		{
+			name: "match mode is irrelevant without tags",
+			in:   SearchQuery{TagMatch: TagMatchAll},
+			want: SearchQuery{TagMatch: TagMatchAny, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
 			name: "single-day date range",
 			in:   SearchQuery{PublishedFrom: day("2024-03-14"), PublishedTo: day("2024-03-14")},
-			want: SearchQuery{PublishedFrom: day("2024-03-14"), PublishedTo: day("2024-03-14"), Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+			want: SearchQuery{PublishedFrom: day("2024-03-14"), PublishedTo: day("2024-03-14"), TagMatch: TagMatchAny, Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
 		},
 		{name: "date range reversed", in: SearchQuery{PublishedFrom: day("2024-03-15"), PublishedTo: day("2024-03-14")}, wantErr: true},
-		{name: "tag too long", in: SearchQuery{Tag: strings.Repeat("a", MaxTagLength+1)}, wantErr: true},
+		{name: "tag too long", in: SearchQuery{Tags: []string{strings.Repeat("a", MaxTagLength+1)}}, wantErr: true},
+		{name: "unknown tag match", in: SearchQuery{Tags: []string{"go"}, TagMatch: "some"}, wantErr: true},
+		{name: "too many tags", in: SearchQuery{Tags: func() []string {
+			var tags []string
+			for i := range MaxTags + 1 {
+				tags = append(tags, fmt.Sprint("t", i))
+			}
+			return tags
+		}()}, wantErr: true},
 		{name: "unknown type", in: SearchQuery{Type: "podcast"}, wantErr: true},
 		{name: "unknown sort", in: SearchQuery{Sort: "date"}, wantErr: true},
 		{name: "negative page", in: SearchQuery{Page: -1}, wantErr: true},

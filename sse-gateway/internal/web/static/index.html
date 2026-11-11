@@ -129,12 +129,21 @@
               <option value="">Tümü</option>
             </select>
           </label>
-          <label class="field">
-            <span>Etiket</span>
-            <select id="tag" name="tag">
-              <option value="">Tümü</option>
-            </select>
-          </label>
+          <div class="field tag-field">
+            <span id="tag-label">Etiket</span>
+            <button id="tag-btn" type="button" class="select-btn" aria-haspopup="true" aria-expanded="false" aria-controls="tag-panel" aria-labelledby="tag-label tag-summary">
+              <span id="tag-summary">Tümü</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div id="tag-panel" class="menu tag-panel" hidden>
+              <div class="seg tag-match" role="radiogroup" aria-label="Birden fazla etiket seçilince">
+                <button type="button" role="radio" data-match="any" aria-checked="true" title="Seçilen etiketlerden en az birini taşıyanlar">Herhangi biri</button>
+                <button type="button" role="radio" data-match="all" aria-checked="false" title="Seçilen etiketlerin hepsini taşıyanlar">Hepsi</button>
+              </div>
+              <div id="tag-options" class="tag-options" role="group" aria-label="Etiketler"></div>
+              <button id="tag-clear" type="button" class="tag-clear" hidden>Seçimi temizle</button>
+            </div>
+          </div>
           <label class="field">
             <span>Yayın: başlangıç</span>
             <input id="published_from" name="published_from" type="date">

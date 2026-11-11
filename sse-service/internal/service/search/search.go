@@ -201,7 +201,7 @@ func (s *Service) version(ctx context.Context) (string, error) {
 // buildKey derives a cache key from a normalized query. Keyword matching is case-insensitive, so the key is too.
 func buildKey(version string, q domain.SearchQuery) string {
 	raw := strings.Join([]string{
-		strings.ToLower(q.Keyword), string(q.Type), q.Provider, q.Tag,
+		strings.ToLower(q.Keyword), string(q.Type), q.Provider, strings.Join(q.Tags, "\x01"), string(q.TagMatch),
 		dateKey(q.PublishedFrom), dateKey(q.PublishedTo), string(q.Sort),
 		strconv.Itoa(q.Page), strconv.Itoa(q.PerPage),
 	}, "\x00")
