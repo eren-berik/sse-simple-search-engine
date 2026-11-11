@@ -119,3 +119,7 @@ func TestStateCollectorSurvivesDatabaseErrors(t *testing.T) {
 	_, err := reg.Gather()
 	assert.NoError(t, err, "a scrape still succeeds; the gauges are just missing")
 }
+
+func (fakeSearcher) ExplainRelevance(context.Context, int64, string) (domain.RelevanceExplanation, error) {
+	return domain.RelevanceExplanation{}, nil
+}

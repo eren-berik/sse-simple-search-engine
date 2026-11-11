@@ -430,3 +430,68 @@ func TestRelevanceRewardsRealMatchesOnly(t *testing.T) {
 	require.NotEmpty(t, mixed.Hits)
 	assert.Equal(t, "Go Testing Best Practices", mixed.Hits[0].Content.Title)
 }
+
+func TestExplainRelevanceMatchesTheRanking(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+	ctx := context.Background()
+	ranked := map[string]domain.SearchHit{}
+	for _, h := range search(t, repo, domain.SearchQuery{Keyword: "programming", PerPage: 100}).Hits {
+		ranked[h.Content.Title] = h
+	}
+
+	for title, want := range map[string]domain.TermMatch{
+		"Go Programming Tutorial":   {Term: "programming", InTitle: 1, InTags: 1},
+		"Go Testing Best Practices": {Term: "programming", InTags: 1},
+	} {
+		hit := ranked[title]
+		e, err := repo.ExplainRelevance(ctx, hit.Content.ID, "programming")
+		require.NoError(t, err)
+		assert.True(t, e.Matches, title)
+		assert.True(t, e.FullText, title)
+		assert.Equal(t, []domain.TermMatch{want}, e.Terms, title)
+		assert.InDelta(t, hit.Relevance, e.Relevance, 1e-9, "%s: the explanation is the ranking's relevance", title)
+
+		// The steps reproduce PostgreSQL's ts_rank.
+		var sum float64
+		for _, s := range e.Steps {
+			sum += s.Value
+		}
+		assert.InDelta(t, e.Rank, sum/domain.RankNormalizer, 1e-6, title)
+	}
+
+	// A partial match is explained by word similarity.
+	kube := search(t, repo, domain.SearchQuery{Keyword: "kuberne"}).Hits[0]
+	e, err := repo.ExplainRelevance(ctx, kube.Content.ID, "kuberne")
+	require.NoError(t, err)
+	assert.True(t, e.Matches)
+	assert.False(t, e.FullText)
+	assert.Empty(t, e.Steps)
+	assert.InDelta(t, kube.Relevance, e.PartialFactor*e.WordSimilarity, 1e-6)
+
+	// Several words: where each is found, no single-word steps.
+	gt := search(t, repo, domain.SearchQuery{Keyword: "go testing"}).Hits[0]
+	e, err = repo.ExplainRelevance(ctx, gt.Content.ID, "go testing")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"go", "testing"}, []string{e.Terms[0].Term, e.Terms[1].Term}, "in query order")
+	assert.Empty(t, e.Steps)
+
+	// An item that does not match the search.
+	docker := search(t, repo, domain.SearchQuery{Keyword: "docker"}).Hits[0]
+	e, err = repo.ExplainRelevance(ctx, docker.Content.ID, "programming")
+	require.NoError(t, err)
+	assert.False(t, e.Matches)
+
+	_, err = repo.ExplainRelevance(ctx, 999999, "go")
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestSearchReportsTheBestRelevance(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	first := search(t, repo, domain.SearchQuery{Keyword: "programming", PerPage: 2})
+	second := search(t, repo, domain.SearchQuery{Keyword: "programming", Page: 2, PerPage: 2})
+	assert.InDelta(t, first.Hits[0].Relevance, first.BestRelevance, 1e-9)
+	assert.InDelta(t, first.BestRelevance, second.BestRelevance, 1e-9, "the same reference on every page")
+}

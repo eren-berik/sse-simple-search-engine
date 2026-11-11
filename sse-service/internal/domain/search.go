@@ -109,11 +109,14 @@ type SearchHit struct {
 
 // SearchResult is a page of search hits.
 type SearchResult struct {
-	Hits    []SearchHit
-	Total   int
-	Page    int
-	PerPage int
-	Sort    SortBy
+	// BestRelevance is the relevance of the search's best match, the reference of every Match;
+	// zero unless sorted by relevance.
+	BestRelevance float64
+	Hits          []SearchHit
+	Total         int
+	Page          int
+	PerPage       int
+	Sort          SortBy
 }
 
 // TotalPages returns the number of pages for the result's total and page size.

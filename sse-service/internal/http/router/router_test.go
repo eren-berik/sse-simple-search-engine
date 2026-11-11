@@ -331,3 +331,33 @@ func TestPublicEndpoints(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.Equal(t, "not_found", errorCode(body))
 }
+
+func (f *fakeSearcher) ExplainRelevance(_ context.Context, id int64, keyword string) (domain.RelevanceExplanation, error) {
+	if id != 1 {
+		return domain.RelevanceExplanation{}, domain.ErrNotFound
+	}
+	term := domain.TermMatch{Term: keyword, InTitle: 1, InTags: 1}
+	steps, rank := domain.RankSteps(term, 1, 0.8)
+	return domain.RelevanceExplanation{
+		Query: keyword, Matches: true, FullText: true, Terms: []domain.TermMatch{term},
+		TitleWeight: 1, TagWeight: 0.8, Rank: rank, Steps: steps, PartialFactor: 0.4, Relevance: rank,
+	}, nil
+}
+
+func TestGetContentExplainsRelevanceForAKeyword(t *testing.T) {
+	app := newApp(t, nil, fakeSyncer{})
+
+	_, body := app.get("/api/v1/contents/1")
+	assert.NotContains(t, body["data"].(map[string]any), "relevance_breakdown", "only with ?q=")
+
+	resp, body := app.get("/api/v1/contents/1?q=programming")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	rel := body["data"].(map[string]any)["relevance_breakdown"].(map[string]any)
+	assert.Equal(t, "full_text", rel["kind"])
+	assert.Equal(t, 0.7295, rel["rank"])
+	assert.Equal(t, 1.6449, rel["rank_normalizer"])
+	steps := rel["rank_steps"].([]any)
+	require.Len(t, steps, 2)
+	assert.Equal(t, map[string]any{"field": "title", "weight": 1.0, "position": 1.0, "value": 1.0}, steps[0])
+	assert.Equal(t, map[string]any{"field": "tags", "weight": 0.8, "position": 2.0, "value": 0.2}, steps[1])
+}
