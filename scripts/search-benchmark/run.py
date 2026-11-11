@@ -15,7 +15,10 @@ COLS = "c.id, c.provider, c.external_id, c.title, c.type, c.views, c.likes, c.du
 def keyword(q, like=None):
     like = like or f"%{q}%"
     cond = f"(c.search_vector @@ websearch_to_tsquery('simple', '{q}') OR c.title ILIKE '{like}')"
-    rel = f"(ts_rank(c.search_vector, websearch_to_tsquery('simple', '{q}')) + similarity(c.title, '{q}'))::float8"
+    # Same as relevanceSQL in sse-service/internal/repository/postgres/content_repository.go.
+    rel = (f"(CASE WHEN c.search_vector @@ websearch_to_tsquery('simple', '{q}') "
+           f"THEN ts_rank('{{0.1, 0.2, 0.8, 1.0}}', c.search_vector, websearch_to_tsquery('simple', '{q}')) "
+           f"ELSE 0.4 * word_similarity('{q}', c.title) END)::float8")
     return cond, rel
 
 
@@ -23,7 +26,11 @@ def scenario(name, extra=None, rel="0::float8", order="score DESC, id ASC", offs
     conds = [LISTED] + ([extra] if extra else [])
     where = "WHERE " + " AND ".join(conds)
     count = f"SELECT count(*) FROM bench.contents c {where}"
-    page = f"SELECT {COLS}, {rel} AS relevance FROM bench.contents c {where} ORDER BY {order} LIMIT 20 OFFSET {offset}"
+    # Like the service: past page 1, relevance sorting also takes the best relevance of the whole
+    # search (max ... OVER ()) for the match percentage; on page 1 it is the first row.
+    best = "max(relevance) OVER ()" if order.startswith("relevance") and offset > 0 else "0::float8"
+    page = (f"SELECT *, {best} AS best FROM (SELECT {COLS}, {rel} AS relevance FROM bench.contents c {where}) hits "
+            f"ORDER BY {order} LIMIT 20 OFFSET {offset}")
     return name, count, page
 
 
@@ -53,6 +60,7 @@ scenarios = [
     scenario("no keyword, popularity, page 5000 (offset 100k)", offset=100000),
     scenario("type=text, popularity", extra="c.type = 'text'"),
     scenario("q=go (28% of rows), relevance", go, go_rel, "relevance DESC, score DESC, id ASC"),
+    scenario("q=go, relevance, page 2", go, go_rel, "relevance DESC, score DESC, id ASC", offset=20),
     scenario("q=docker (9%), relevance", docker, docker_rel, "relevance DESC, score DESC, id ASC"),
     scenario("q=w3000 (rare, 769 rows), relevance", rare, rare_rel, "relevance DESC, score DESC, id ASC"),
     scenario("q=go, popularity", go, order="score DESC, id ASC"),
