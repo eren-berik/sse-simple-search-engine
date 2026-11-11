@@ -22,9 +22,14 @@ func TestSearchQueryNormalize(t *testing.T) {
 			want: SearchQuery{Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
-			name: "defaults to relevance with keyword and collapses whitespace",
+			name: "defaults to popularity with keyword and collapses whitespace",
 			in:   SearchQuery{Keyword: "  go   concurrency "},
-			want: SearchQuery{Keyword: "go concurrency", Sort: SortRelevance, Page: 1, PerPage: DefaultPerPage},
+			want: SearchQuery{Keyword: "go concurrency", Sort: SortPopularity, Page: 1, PerPage: DefaultPerPage},
+		},
+		{
+			name: "relevance with keyword",
+			in:   SearchQuery{Keyword: "go", Sort: SortRelevance},
+			want: SearchQuery{Keyword: "go", Sort: SortRelevance, Page: 1, PerPage: DefaultPerPage},
 		},
 		{
 			name: "relevance without keyword falls back to popularity",

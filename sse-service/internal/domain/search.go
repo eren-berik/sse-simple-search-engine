@@ -40,7 +40,8 @@ type SearchQuery struct {
 }
 
 // Normalize applies defaults and validates the query in place.
-// Relevance sorting without a keyword falls back to popularity, since there is nothing to be relevant to.
+// Results are sorted by popularity unless relevance is asked for. Relevance sorting without a
+// keyword falls back to popularity, since there is nothing to be relevant to.
 func (q *SearchQuery) Normalize() error {
 	q.Keyword = strings.Join(strings.Fields(q.Keyword), " ")
 	if utf8.RuneCountInString(q.Keyword) > MaxKeywordLength {
@@ -67,9 +68,6 @@ func (q *SearchQuery) Normalize() error {
 	switch q.Sort {
 	case "":
 		q.Sort = SortPopularity
-		if q.Keyword != "" {
-			q.Sort = SortRelevance
-		}
 	case SortPopularity, SortRelevance:
 	default:
 		return fmt.Errorf("%w: unknown sort %q (expected popularity or relevance)", ErrInvalidInput, q.Sort)
