@@ -567,6 +567,7 @@ Tüm uç noktalar gateway üzerinden (`:8080`) sunulur. Tam şema: [`sse-gateway
 | `GET` | `/api/v1/auth/me` | token | iam | Oturumdaki kullanıcı |
 | `GET` | `/api/v1/contents` | token | sse | Arama, filtreler, sıralama, sayfalama |
 | `GET` | `/api/v1/contents/{id}` | token | sse | İçerik detayı + skor kırılımı; `?q=` ile alakalılık kırılımı |
+| `GET` | `/api/v1/tags` | token | sse | Listelenen içeriklerin etiketleri ve kaç içerikte geçtikleri (en çok kullanılan önce); etiket filtresinin seçenekleri |
 | `GET` | `/api/v1/providers` | token | sse | Provider listesi |
 | `POST` | `/api/v1/providers` | admin | sse | Provider ekler (format otomatik algılanabilir) |
 | `PATCH` | `/api/v1/providers/{id}` | admin | sse | Ad, URL, format, etkinlik |
@@ -859,7 +860,7 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
   - `tag`: o etiketi taşıyan içerikler. Büyük/küçük harf duyarsız; etiketler küçük harfle saklandığı için sorgu `tags @> ARRAY[...]` şeklinde GIN index'i kullanır.
   - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
 
-  Dashboard'da etiket filtresi kartlardaki etikete tıklanarak, tarih aralığı da iki tarih alanıyla seçilir. Aşağıda `devops` etiketi ve 14–15 Mart aralığı birlikte uygulanmış:
+  Dashboard'da etiket filtresi açılır listeden ya da kartlardaki etikete tıklanarak, tarih aralığı da iki tarih alanıyla seçilir. Aşağıda `devops` etiketi ve 14–15 Mart aralığı birlikte uygulanmış:
 
   <img src="docs/images/filters.png" alt="Etiket ve tarih filtresi" width="700">
 - **Sıralama:**
@@ -900,6 +901,7 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 - **Versiyonlu invalidation:** Cache'i geçersiz kılmak için `search:version` sayacı `INCR` edilir. Eski anahtarlar bir daha okunmaz ve TTL dolunca silinir. Invalidation O(1) ve atomik; anahtar taraması gerekmez.
 - **Sadece bir şey değiştiyse:** Sync, değişmemiş kayıtları yazmaz; skor yeniden hesaplaması da yalnızca gerçekten değişen skorları yazar. Cache, ancak bir sync bir kaydı ekleyip değiştirdiyse, gizlediyse ya da skorunu değiştirdiyse temizlenir. Provider verisi aynı kaldıkça cache sync'ler arasında korunur. Provider'ın adı değişince, açılıp kapatılınca ya da silinince de cache temizlenir.
 - **Ön ısıtma (cache warming):** Cache her geçersizleştiğinde, kullanıcının hiçbir şey yazmadan gördüğü sorgular hemen yeniden hesaplanıp cache'e yazılır: her türün (tümü, video, metin) popülerliğe göre ilk sayfası, hem dashboard'un sayfa boyutuyla (10) hem API'nin varsayılanıyla (20), toplam 6 sorgu.
+  - Etiket listesi (`GET /api/v1/tags`) da aynı versiyonla `search:v{versiyon}:tags` anahtarında cache'lenir ve birlikte ısıtılır; içerik değiştiren bir sync onu da yeniler.
   - Böylece sync'ten sonra dashboard'u açan ilk kullanıcılar da cache'ten yanıt alır. Ön ısıtma birkaç milisaniye sürer, 5 sn ile sınırlıdır ve başarısız olursa yalnızca loglanır.
   - Kullanıcı araması sayılmaz, bu yüzden `search_requests_total` metriğini etkilemez.
   - `CACHE_WARM=false` ile kapatılabilir.
@@ -931,9 +933,11 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzd�
   | Metin | Okuma süresi | Reaksiyon | Yorum | Reaksiyon / dk |
 
   Dördüncü sütun, skor formülündeki etkileşim oranıdır. Sayılar 1 milyona kadar tam yazılır; Türkçe kısaltmadaki "B" (bin) "milyar" gibi okunabildiği için kısaltma sadece milyonun üstünde kullanılır.
-- **Filtreler:** Arama kutusu, tür için Tümü / Video / Metin seçimi, provider, yayın tarihi aralığı, sıralama ve sayfa boyutu; numaralı sayfalama.
-  - Kartlardaki ve detay penceresindeki etiketlere tıklanınca liste o etikete göre süzülür. Etiket filtresi sonuç sayısının yanında kaldırılabilir bir rozet olarak görünür; aynı etikete tekrar tıklamak da filtreyi kaldırır.
+- **Filtreler:** Arama kutusu ve yanında tür için Tümü / Video / Metin seçimi; altında provider, etiket, yayın tarihi aralığı, sıralama ve sayfa boyutu; numaralı sayfalama.
+  - Etiket listesi mevcut bütün etiketleri kaç içerikte geçtikleriyle gösterir ("programming (5)"). Kartlardaki ve detay penceresindeki etiketlere tıklamak da aynı filtreyi seçer; aynı etikete tekrar tıklamak filtreyi kaldırır.
+  - Kartlarda etiketlerin hepsi başlığın altında ayrı bir satırda gösterilir.
   - Tarih alanları birbirini sınırlar, böylece ters bir aralık seçilemez.
+- **Hesap menüsü:** Sağ üstteki kullanıcı adı ve rolüne tıklanınca açılan menüde "Çıkış yap" bulunur; menü dışına tıklamak ya da Esc kapatır.
 - **Detay penceresi:** Metriklerin tam değerleri, skorun adım adım hesabı ([Puanlama](#puanlama)) ve alakalılık sıralamalı bir listeden açıldıysa alakalılığın adım adım hesabı ([Arama ve Sıralama](#arama-ve-sıralama)).
 - **Provider yönetimi (admin):** Provider tablosunda format, URL, durum ve son sync sonucu ("4 kayıt · değişiklik yok", "· 2 kaldırıldı") görünür. Sync, düzenleme, etkinleştirme ve silme işlemleri ikon butonlarla yapılır. Yeni provider formunda format otomatik algılanır ve ad kuralı alanın altında açıklanır.
 

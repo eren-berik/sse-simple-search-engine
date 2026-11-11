@@ -225,7 +225,7 @@
     }
     openPanel("contents-panel");
     state.page = 1;
-    loadProviderOptions();
+    loadFilterOptions();
     loadContents();
   }
 
@@ -250,6 +250,7 @@
     $("published_to").min = "";
     $("published_from").max = "";
     $("provider").replaceChildren(new Option("Tümü", ""));
+    $("tag").replaceChildren(new Option("Tümü", ""));
     state.page = 1;
     state.totalPages = 0;
     state.ranked = null;
@@ -307,7 +308,28 @@
     });
   });
 
+  // ---------------------------------------------------------------- account menu
+  function setUserMenu(open) {
+    $("user-menu").hidden = !open;
+    $("user-menu-btn").setAttribute("aria-expanded", String(open));
+  }
+  $("user-menu-btn").addEventListener("click", () => {
+    const open = $("user-menu").hidden;
+    setUserMenu(open);
+    if (open) $("logout-btn").focus();
+  });
+  document.addEventListener("click", (e) => {
+    if (!$("user-box").contains(e.target)) setUserMenu(false);
+  });
+  $("user-box").addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("user-menu").hidden) {
+      setUserMenu(false);
+      $("user-menu-btn").focus();
+    }
+  });
+
   $("logout-btn").addEventListener("click", async () => {
+    setUserMenu(false);
     const refreshToken = session?.refreshToken;
     signOut();
     if (refreshToken) {
@@ -431,8 +453,12 @@
     const meta = el("div", "item-meta");
     meta.append(el("span", "", typeLabels[item.type] || item.type), el("span", "dot", item.provider),
       el("span", "dot", fmtDate.format(new Date(item.published_at))));
-    for (const tag of item.tags.slice(0, 3)) meta.append(tagChip(tag));
     main.append(el("h3", "item-title", item.title), meta);
+    if (item.tags.length) {
+      const tags = el("div", "item-tags");
+      tags.append(...item.tags.map((tag) => tagChip(tag)));
+      main.append(tags);
+    }
 
     const metrics = el("div", "metrics");
     for (const column of metricColumns[item.type] || []) metrics.append(metricCell(column, item.metrics));
@@ -543,6 +569,26 @@
       if (isStale(epoch)) return;
       $("results").replaceChildren();
       showError($("error"), err.message);
+    }
+  }
+
+  // loadFilterOptions refreshes the choices of the provider and tag filters.
+  function loadFilterOptions() {
+    return Promise.all([loadProviderOptions(), loadTagOptions()]);
+  }
+
+  async function loadTagOptions() {
+    const epoch = authEpoch;
+    try {
+      const { data } = await api("/api/v1/tags");
+      if (isStale(epoch)) return;
+      const select = $("tag");
+      const current = select.value;
+      select.replaceChildren(new Option("Tümü", ""));
+      for (const t of data.data) select.append(new Option(`${t.name} (${fmtNumber.format(t.count)})`, t.name));
+      select.value = [...select.options].some((o) => o.value === current) ? current : "";
+    } catch {
+      /* the filter stays limited to "all"; tags can still be picked from the cards */
     }
   }
 
@@ -767,25 +813,11 @@
     loadContents();
   }
 
-  // The tag filter is set from the tag chips and shown as a removable pill.
+  // The tag filter is set from its select or from the tag chips on the cards.
   function setTag(tag) {
-    $("tag").value = tag;
-    renderActiveFilters();
-  }
-
-  function renderActiveFilters() {
-    const box = $("active-filters");
-    box.replaceChildren();
-    const tag = $("tag").value;
-    if (!tag) return;
-    const pill = el("span", "filter-pill", `Etiket: ${tag}`);
-    const remove = el("button");
-    remove.type = "button";
-    remove.setAttribute("aria-label", "Etiket filtresini kaldır");
-    remove.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
-    remove.addEventListener("click", () => applyFilter(() => setTag("")));
-    pill.append(remove);
-    box.append(pill);
+    const select = $("tag");
+    if (tag && ![...select.options].some((o) => o.value === tag)) select.append(new Option(tag, tag));
+    select.value = tag;
   }
 
   // Each date bounds the other, so the browser's picker cannot produce a reversed range.
@@ -818,7 +850,7 @@
     clearTimeout(debounce);
     debounce = setTimeout(() => { state.page = 1; loadContents(); }, 300);
   });
-  for (const id of ["provider", "sort", "per_page"]) {
+  for (const id of ["provider", "tag", "sort", "per_page"]) {
     $(id).addEventListener("change", () => { state.page = 1; loadContents(); });
   }
   $("filters").addEventListener("submit", (e) => { e.preventDefault(); state.page = 1; loadContents(); });
@@ -898,7 +930,7 @@
       toast(failed.length
         ? `Senkronizasyon tamamlandı, ${failed.length} provider başarısız oldu.`
         : `Senkronizasyon tamamlandı (${data.data.runs.length} provider).`);
-      await loadProviders();
+      await Promise.all([loadProviders(), loadFilterOptions()]);
       loadContents();
     } catch (err) {
       if (!isStale(epoch)) showError($("error"), err.message);
@@ -918,7 +950,7 @@
         ? `"${p.name}" devre dışı bırakıldı; içerikleri aramada gösterilmeyecek.`
         : `"${p.name}" etkinleştirildi.`);
       await loadProviders();
-      await loadProviderOptions();
+      await loadFilterOptions();
       loadContents();
     } catch (err) {
       if (isStale(epoch)) return;
@@ -936,7 +968,7 @@
       if (isStale(epoch)) return;
       toast(`"${p.name}" silindi.`);
       await loadProviders();
-      await loadProviderOptions();
+      await loadFilterOptions();
       loadContents();
     } catch (err) {
       if (isStale(epoch)) return;
@@ -987,7 +1019,7 @@
       $("provider-edit").close();
       toast(`"${data.data.name}" güncellendi (format: ${data.data.format.toUpperCase()}).`);
       await loadProviders();
-      await loadProviderOptions();
+      await loadFilterOptions();
       loadContents();
     } catch (err) {
       if (!isStale(epoch)) showError($("provider-edit-error"), err.message);
@@ -1014,7 +1046,7 @@
       form.reset();
       toast(`"${data.data.name}" eklendi (format: ${data.data.format.toUpperCase()}). İçerikleri için senkronize edin.`);
       await loadProviders();
-      loadProviderOptions();
+      loadFilterOptions();
     } catch (err) {
       if (!isStale(epoch)) showError($("error"), err.message);
     } finally {

@@ -37,12 +37,20 @@
       </nav>
 
       <div id="user-box" class="user" hidden>
-        <span id="user-avatar" class="avatar" aria-hidden="true"></span>
-        <div class="user-meta">
-          <span id="user-name"></span>
-          <span id="user-role" class="role"></span>
+        <button id="user-menu-btn" type="button" class="user-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="user-menu">
+          <span id="user-avatar" class="avatar" aria-hidden="true"></span>
+          <span class="user-meta">
+            <span id="user-name"></span>
+            <span id="user-role" class="role"></span>
+          </span>
+          <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <div id="user-menu" class="menu" role="menu" hidden>
+          <button id="logout-btn" type="button" class="menu-item" role="menuitem">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+            Çıkış yap
+          </button>
         </div>
-        <button id="logout-btn" type="button" class="secondary">Çıkış yap</button>
       </div>
 
       <button id="theme-toggle" type="button" class="icon-btn theme-toggle secondary" aria-label="Karanlık temaya geç" title="Karanlık temaya geç">
@@ -101,23 +109,29 @@
 
     <section id="contents-panel">
       <form id="filters" class="filter-card" autocomplete="off">
-        <label class="search">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-          <input id="q" name="q" type="search" placeholder="Başlık veya etiket ara: go, docker, kubernetes…" aria-label="Anahtar kelime">
-        </label>
-
-        <div class="filter-row">
+        <div class="search-row">
+          <label class="search">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="q" name="q" type="search" placeholder="Başlık veya etiket ara: go, docker, kubernetes…" aria-label="Anahtar kelime">
+          </label>
           <input id="type" name="type" type="hidden" value="">
-          <input id="tag" name="tag" type="hidden" value="">
           <div class="seg" role="radiogroup" aria-label="İçerik türü" id="type-seg">
             <button type="button" role="radio" data-type="" aria-checked="true">Tümü</button>
             <button type="button" role="radio" data-type="video" aria-checked="false">Video</button>
             <button type="button" role="radio" data-type="text" aria-checked="false">Metin</button>
           </div>
+        </div>
 
+        <div class="filter-row">
           <label class="field">
             <span>Provider</span>
             <select id="provider" name="provider">
+              <option value="">Tümü</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Etiket</span>
+            <select id="tag" name="tag">
               <option value="">Tümü</option>
             </select>
           </label>
@@ -151,7 +165,6 @@
       <div class="results-head">
         <div class="summary-line">
           <p id="summary" class="summary"></p>
-          <div id="active-filters" class="active-filters"></div>
         </div>
         <p id="sort-hint" class="hint" hidden>
           Alakalılık bir anahtar kelimeye göre hesaplanır; kelime girilmediği için sonuçlar popülerliğe göre sıralandı.
