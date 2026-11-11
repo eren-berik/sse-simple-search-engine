@@ -26,6 +26,8 @@
   color-scheme: light;
 }
 
+/* Dark tokens apply when the system prefers dark and no light theme was chosen, or when
+   dark was chosen with the theme button. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0b0d12;
@@ -51,6 +53,31 @@
     --shadow-lg: 0 16px 40px rgb(0 0 0 / 50%);
     color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b0d12;
+  --surface: #141821;
+  --surface-2: #1a1f2a;
+  --text: #e8eaf0;
+  --muted: #98a0b3;
+  --border: #262c38;
+  --accent: #818cf8;
+  --accent-soft: #1e2140;
+  --accent-text: #0b0d12;
+  --video: #7aa7ff;
+  --video-soft: #16223b;
+  --text-type: #fb923c;
+  --text-soft: #2c1d12;
+  --good: #34d399;
+  --good-soft: #10261f;
+  --error-bg: #2a1214;
+  --error-text: #fca5a5;
+  --admin: #c4b5fd;
+  --off: #6b7280;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 50%);
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -178,6 +205,11 @@ button:disabled { opacity: .5; cursor: default; }
 .role { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .role.admin { color: var(--admin); }
 .role.viewer { color: var(--video); }
+
+/* The button shows the theme it switches to. */
+.theme-toggle .sun { display: none; }
+:root[data-theme="dark"] .theme-toggle .sun { display: block; }
+:root[data-theme="dark"] .theme-toggle .moon { display: none; }
 
 main { max-width: 1200px; margin: 0 auto; padding: 24px 20px 48px; }
 

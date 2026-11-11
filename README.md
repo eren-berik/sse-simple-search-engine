@@ -916,7 +916,7 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 
 ## Dashboard
 
-Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzdür (HTML, CSS, vanilla JS). Gateway binary'sine gömülüdür; açık ve koyu temayı sistem ayarına göre seçer ve telefon genişliğinde de çalışır.
+Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzdür (HTML, CSS, vanilla JS). Gateway binary'sine gömülüdür; açık ve koyu temayı başlangıçta sistem ayarına göre seçer, sağ üstteki düğmeyle değiştirilebilir (seçim tarayıcıda hatırlanır) ve telefon genişliğinde de çalışır.
 
 - **Sonuç listesi:** Her içerik bir satır kartında gösterilir: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Kartın sağında listenin neye göre sıralandığı öne çıkar:
   - **Popülerlik sıralamasında** büyük puntoyla skor.
@@ -973,7 +973,7 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzd�
 
 **Koyu tema ve telefon**
 
-| Koyu tema (sistem ayarına göre) | Telefon genişliği |
+| Koyu tema | Telefon genişliği |
 |---|---|
 | <img src="docs/images/contents-dark.png" alt="Koyu tema" width="420"> | <img src="docs/images/mobile.png" alt="Telefon" width="210"> |
 

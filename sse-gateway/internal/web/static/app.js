@@ -315,6 +315,36 @@
     }
   });
 
+  // ---------------------------------------------------------------- theme
+  // The page starts with the stored theme, or the system's when none was chosen (see the script
+  // in index.html). A choice made with the button is stored; until then the page follows
+  // system changes.
+  const THEME_KEY = "theme";
+  const systemDark = matchMedia("(prefers-color-scheme: dark)");
+
+  function applyTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    const label = theme === "dark" ? "Aydınlık temaya geç" : "Karanlık temaya geç";
+    $("theme-toggle").setAttribute("aria-label", label);
+    $("theme-toggle").title = label;
+  }
+
+  function storedTheme() {
+    try { return localStorage.getItem(THEME_KEY); } catch { return null; }
+  }
+
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "dark" : "light");
+
+  $("theme-toggle").addEventListener("click", () => {
+    const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+    applyTheme(theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage unavailable */ }
+  });
+
+  systemDark.addEventListener("change", (e) => {
+    if (!storedTheme()) applyTheme(e.matches ? "dark" : "light");
+  });
+
   // ---------------------------------------------------------------- panels
   function openPanel(id) {
     for (const panel of ["contents-panel", "providers-panel"]) {
