@@ -228,6 +228,31 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
 
+  /api/v1/tags:
+    get:
+      tags: [contents]
+      summary: List the tags of the listed contents
+      description: Every tag with how many listed items carry it, most used first. Use a name as the tag filter of GET /api/v1/contents.
+      responses:
+        '200':
+          description: Tags with their item counts
+          headers:
+            X-Cache:
+              schema: { type: string, enum: [HIT, MISS, BYPASS] }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string, example: programming }
+                        count: { type: integer, example: 5 }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
   /api/v1/providers:
     get:
       tags: [providers]

@@ -21,6 +21,7 @@ type Searcher interface {
 	Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, search.CacheStatus, error)
 	Get(ctx context.Context, id int64) (domain.Content, scoring.Breakdown, error)
 	ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error)
+	Tags(ctx context.Context) ([]domain.TagCount, search.CacheStatus, error)
 }
 
 type ContentHandler struct {
@@ -170,6 +171,25 @@ func (h *ContentHandler) List(c *fiber.Ctx) error {
 		meta.BestRelevance = &best
 	}
 	return httpx.OK(c, items, meta)
+}
+
+type tagDTO struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// Tags handles GET /api/v1/tags: the tags of the listed contents, most used first.
+func (h *ContentHandler) Tags(c *fiber.Ctx) error {
+	tags, status, err := h.svc.Tags(c.UserContext())
+	if err != nil {
+		return err
+	}
+	c.Set("X-Cache", string(status))
+	items := make([]tagDTO, len(tags))
+	for i, t := range tags {
+		items[i] = tagDTO{Name: t.Name, Count: t.Count}
+	}
+	return httpx.OK(c, items, nil)
 }
 
 // Get handles GET /api/v1/contents/:id.

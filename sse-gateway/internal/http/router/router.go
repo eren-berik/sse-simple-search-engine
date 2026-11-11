@@ -73,7 +73,10 @@ func New(d Deps) *fiber.App {
 		api.Post(path, append(user, adminWrites, syncLimit, proxy.Forward(sse))...)
 	}
 
-	proxy.Mount(api, []proxy.Route{{Prefix: "/v1/contents", Target: sse}}, user...)
+	proxy.Mount(api, []proxy.Route{
+		{Prefix: "/v1/contents", Target: sse},
+		{Prefix: "/v1/tags", Target: sse},
+	}, user...)
 	// Every user may read providers and sync runs; changing them is for admins.
 	proxy.Mount(api, []proxy.Route{
 		{Prefix: "/v1/providers", Target: sse},

@@ -49,6 +49,10 @@ func (f *fakeSearcher) Search(_ context.Context, q domain.SearchQuery) (domain.S
 	}, search.CacheHit, nil
 }
 
+func (f *fakeSearcher) Tags(context.Context) ([]domain.TagCount, search.CacheStatus, error) {
+	return []domain.TagCount{{Name: "programming", Count: 5}, {Name: "devops", Count: 3}}, search.CacheMiss, nil
+}
+
 func (f *fakeSearcher) Get(_ context.Context, id int64) (domain.Content, scoring.Breakdown, error) {
 	if id != 1 {
 		return domain.Content{}, scoring.Breakdown{}, domain.ErrNotFound
@@ -185,6 +189,21 @@ func TestAuthorization(t *testing.T) {
 	resp, body := app.call(http.MethodGet, "/api/v1/contents", "forged.token.value", "")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Equal(t, "invalid_token", errorCode(body))
+}
+
+func TestListTags(t *testing.T) {
+	app := newApp(t, nil, fakeSyncer{})
+
+	resp, body := app.get("/api/v1/tags")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "MISS", resp.Header.Get("X-Cache"))
+	assert.Equal(t, []any{
+		map[string]any{"name": "programming", "count": float64(5)},
+		map[string]any{"name": "devops", "count": float64(3)},
+	}, body["data"])
+
+	resp, _ = app.call(http.MethodGet, "/api/v1/tags", "", "")
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode, "tags need a token like contents")
 }
 
 func TestListContents(t *testing.T) {

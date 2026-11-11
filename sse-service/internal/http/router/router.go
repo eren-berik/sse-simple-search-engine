@@ -40,6 +40,7 @@ func New(d Deps) *fiber.App {
 	v1 := app.Group("/api/v1", jwtauth.Authenticate(d.Verifier))
 	v1.Get("/contents", d.Contents.List)
 	v1.Get("/contents/:id", d.Contents.Get)
+	v1.Get("/tags", d.Contents.Tags)
 	v1.Get("/providers", d.Providers.List)
 	v1.Get("/sync/runs", d.Sync.Status)
 

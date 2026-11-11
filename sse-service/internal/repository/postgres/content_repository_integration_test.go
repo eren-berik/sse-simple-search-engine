@@ -495,3 +495,39 @@ func TestSearchReportsTheBestRelevance(t *testing.T) {
 	assert.InDelta(t, first.Hits[0].Relevance, first.BestRelevance, 1e-9)
 	assert.InDelta(t, first.BestRelevance, second.BestRelevance, 1e-9, "the same reference on every page")
 }
+
+func TestTagsCountListedItems(t *testing.T) {
+	repo, pool := newTestRepo(t)
+	seed(t, repo)
+	ctx := context.Background()
+
+	tags, err := repo.Tags(ctx)
+	require.NoError(t, err)
+	require.Len(t, tags, 13)
+	assert.Equal(t, domain.TagCount{Name: "programming", Count: 5}, tags[0], "most used first")
+	assert.Equal(t, domain.TagCount{Name: "devops", Count: 3}, tags[1])
+	assert.Equal(t, domain.TagCount{Name: "advanced", Count: 1}, tags[2], "ties in name order")
+
+	// Removing the Docker video (devops, containers) drops its tags from the counts.
+	_, err = repo.MarkRemoved(ctx, "provider2", []string{"v2", "v3", "a1"}, fixedNow)
+	require.NoError(t, err)
+	tags, err = repo.Tags(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, tags, domain.TagCount{Name: "devops", Count: 2})
+	assert.NotContains(t, tagNames(tags), "containers")
+
+	// Contents of a disabled provider are hidden, and so are tags only they carry.
+	_, err = pool.Exec(ctx, `UPDATE providers SET enabled = false WHERE name = 'provider2'`)
+	require.NoError(t, err)
+	tags, err = repo.Tags(ctx)
+	require.NoError(t, err)
+	assert.NotContains(t, tagNames(tags), "kubernetes")
+}
+
+func tagNames(tags []domain.TagCount) []string {
+	names := make([]string, len(tags))
+	for i, t := range tags {
+		names[i] = t.Name
+	}
+	return names
+}

@@ -61,6 +61,7 @@ type Searcher interface {
 	Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, search.CacheStatus, error)
 	Get(ctx context.Context, id int64) (domain.Content, scoring.Breakdown, error)
 	ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error)
+	Tags(ctx context.Context) ([]domain.TagCount, search.CacheStatus, error)
 }
 
 // InstrumentSearcher counts searches by cache status.

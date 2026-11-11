@@ -25,6 +25,7 @@ type ContentSearcher interface {
 	Search(ctx context.Context, q domain.SearchQuery) (domain.SearchResult, error)
 	GetByID(ctx context.Context, id int64) (domain.Content, error)
 	ExplainRelevance(ctx context.Context, id int64, keyword string) (domain.RelevanceExplanation, error)
+	Tags(ctx context.Context) ([]domain.TagCount, error)
 }
 
 // CacheStatus reports how a search was served.
@@ -72,44 +73,59 @@ func (s *Service) Search(ctx context.Context, q domain.SearchQuery) (domain.Sear
 	if err := q.Normalize(); err != nil {
 		return domain.SearchResult{}, "", err
 	}
+	return cached(ctx, s, func(version string) string { return buildKey(version, q) },
+		func(ctx context.Context) (domain.SearchResult, error) { return s.repo.Search(ctx, q) })
+}
 
-	key, err := s.cacheKey(ctx, q)
+// Tags returns the tags of the listed items with their counts, for the dashboard's tag filter.
+// It is cached like a search and goes stale with them, since a sync changes both.
+func (s *Service) Tags(ctx context.Context) ([]domain.TagCount, CacheStatus, error) {
+	return cached(ctx, s, func(version string) string { return "search:v" + version + ":tags" }, s.repo.Tags)
+}
+
+// cached serves a value from the cache under the key built from the current cache version,
+// and on a miss loads it, stores it and returns it. Concurrent loads of one key share a single
+// call. Cache failures never fail the request; the database is the source of truth.
+func cached[T any](ctx context.Context, s *Service, key func(version string) string, load func(context.Context) (T, error)) (T, CacheStatus, error) {
+	var zero T
+	version, err := s.version(ctx)
 	if err != nil {
 		s.log.WarnContext(ctx, "cache unavailable, bypassing", "error", err)
-		res, err := s.repo.Search(ctx, q)
-		return res, CacheBypass, err
+		v, err := load(ctx)
+		return v, CacheBypass, err
 	}
+	k := key(version)
 
-	if data, ok, err := s.cache.Get(ctx, key); err != nil {
+	if data, ok, err := s.cache.Get(ctx, k); err != nil {
 		s.log.WarnContext(ctx, "cache get failed", "error", err)
 	} else if ok {
-		var res domain.SearchResult
-		if err := json.Unmarshal(data, &res); err == nil {
-			return res, CacheHit, nil
+		var v T
+		if err := json.Unmarshal(data, &v); err == nil {
+			return v, CacheHit, nil
 		}
-		s.log.WarnContext(ctx, "discarding undecodable cache entry", "key", key)
+		s.log.WarnContext(ctx, "discarding undecodable cache entry", "key", k)
 	}
 
-	v, err, _ := s.group.Do(key, func() (any, error) {
+	v, err, _ := s.group.Do(k, func() (any, error) {
 		// The shared query must not be cancelled just because the first caller went away.
 		qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), queryTimeout)
 		defer cancel()
 
-		res, err := s.repo.Search(qctx, q)
+		v, err := load(qctx)
 		if err != nil {
-			return domain.SearchResult{}, err
+			return zero, err
 		}
-		if data, err := json.Marshal(res); err == nil {
-			if err := s.cache.Set(qctx, key, data, s.ttl); err != nil {
+		if data, err := json.Marshal(v); err == nil {
+			if err := s.cache.Set(qctx, k, data, s.ttl); err != nil {
 				s.log.WarnContext(ctx, "cache set failed", "error", err)
 			}
 		}
-		return res, nil
+		return v, nil
 	})
 	if err != nil {
-		return domain.SearchResult{}, CacheMiss, err
+		return zero, CacheMiss, err
 	}
-	return v.(domain.SearchResult), CacheMiss, nil
+	return v.(T), CacheMiss, nil
 }
 
 // Get returns a content item with a live breakdown of its score.
@@ -145,7 +161,7 @@ func (s *Service) Invalidate(ctx context.Context) error {
 	return nil
 }
 
-// warmUp searches the warm queries, which caches their results under the new version. Failures
+// warmUp searches the warm queries and loads the tags, which caches them under the new version. Failures
 // are logged: a query that could not be warmed is simply computed by its first user.
 func (s *Service) warmUp(ctx context.Context) {
 	if len(s.warm) == 0 {
@@ -162,19 +178,24 @@ func (s *Service) warmUp(ctx context.Context) {
 			warmed++
 		}
 	}
+	if _, status, err := s.Tags(ctx); err != nil {
+		s.log.WarnContext(ctx, "warming the cached tags failed", "error", err)
+	} else if status != CacheBypass {
+		warmed++
+	}
 	s.log.InfoContext(ctx, "search cache warmed", "queries", warmed, "duration", time.Since(start))
 }
 
-func (s *Service) cacheKey(ctx context.Context, q domain.SearchQuery) (string, error) {
-	version := "0"
+// version returns the current cache version, which every cache key embeds.
+func (s *Service) version(ctx context.Context) (string, error) {
 	data, ok, err := s.cache.Get(ctx, versionKey)
 	if err != nil {
 		return "", err
 	}
-	if ok {
-		version = string(data)
+	if !ok {
+		return "0", nil
 	}
-	return buildKey(version, q), nil
+	return string(data), nil
 }
 
 // buildKey derives a cache key from a normalized query. Keyword matching is case-insensitive, so the key is too.
