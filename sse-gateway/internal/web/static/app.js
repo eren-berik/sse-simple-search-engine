@@ -246,11 +246,13 @@
     clearTimeout(debounce);
     $("filters").reset();
     setType("");
-    setTag("");
+    tagFilter.selected.clear();
+    tagFilter.counts = [];
+    setTagMatch("any");
+    renderTagFilter();
     $("published_to").min = "";
     $("published_from").max = "";
     $("provider").replaceChildren(new Option("Tümü", ""));
-    $("tag").replaceChildren(new Option("Tümü", ""));
     state.page = 1;
     state.totalPages = 0;
     state.ranked = null;
@@ -469,14 +471,14 @@
 
   // tagChip filters the list by its tag; clicking the active tag clears the filter.
   function tagChip(tag, { closeDialog = false } = {}) {
-    const chip = el("button", `chip ${tag === $("tag").value ? "active" : ""}`.trim(), tag);
+    const chip = el("button", `chip ${tagFilter.selected.has(tag) ? "active" : ""}`.trim(), tag);
     chip.type = "button";
     chip.title = `"${tag}" etiketine göre filtrele`;
     chip.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation(); // the card behind the chip opens the detail dialog
       if (closeDialog) $("detail").close();
-      applyFilter(() => setTag(tag === $("tag").value ? "" : tag));
+      applyFilter(() => toggleTag(tag));
     });
     chip.addEventListener("keydown", (e) => e.stopPropagation());
     return chip;
@@ -549,10 +551,12 @@
   async function loadContents() {
     const epoch = authEpoch;
     const params = new URLSearchParams();
-    for (const key of ["q", "type", "provider", "tag", "published_from", "published_to", "sort", "per_page"]) {
+    for (const key of ["q", "type", "provider", "published_from", "published_to", "sort", "per_page"]) {
       const value = $(key).value.trim();
       if (value) params.set(key, value);
     }
+    for (const tag of tagFilter.selected) params.append("tag", tag);
+    if (tagFilter.selected.size > 1 && tagFilter.match === "all") params.set("tag_match", "all");
     params.set("page", state.page);
 
     renderSkeleton(Number($("per_page").value));
@@ -578,11 +582,8 @@
     try {
       const { data } = await api("/api/v1/tags");
       if (isStale(epoch)) return;
-      const select = $("tag");
-      const current = select.value;
-      select.replaceChildren(new Option("Tümü", ""));
-      for (const t of data.data) select.append(new Option(`${t.name} (${fmtNumber.format(t.count)})`, t.name));
-      select.value = [...select.options].some((o) => o.value === current) ? current : "";
+      tagFilter.counts = data.data;
+      renderTagFilter();
     } catch {
       /* the filter stays limited to "all"; tags can still be picked from the cards */
     }
@@ -809,12 +810,78 @@
     loadContents();
   }
 
-  // The tag filter is set from its select or from the tag chips on the cards.
-  function setTag(tag) {
-    const select = $("tag");
-    if (tag && ![...select.options].some((o) => o.value === tag)) select.append(new Option(tag, tag));
-    select.value = tag;
+  // ---------------------------------------------------------------- tag filter
+  // Several tags can be selected, from the checklist or from the tag chips on the cards. With
+  // more than one, the match mode says whether items need any of them or all of them.
+  const tagFilter = { selected: new Set(), match: "any", counts: [] };
+
+  function toggleTag(tag) {
+    if (!tagFilter.selected.delete(tag)) tagFilter.selected.add(tag);
+    renderTagFilter();
   }
+
+  function setTagMatch(match) {
+    tagFilter.match = match;
+    for (const b of document.querySelectorAll("#tag-panel [data-match]")) {
+      b.setAttribute("aria-checked", String(b.dataset.match === match));
+    }
+  }
+
+  // renderTagFilter shows the selection on the button and the checklist: selected tags first,
+  // then the most used. Selected tags missing from the list (e.g. gone after a sync) stay listed
+  // so they can be cleared.
+  function renderTagFilter() {
+    const selected = [...tagFilter.selected];
+    $("tag-summary").textContent = selected.length === 0 ? "Tümü"
+      : selected.length === 1 ? selected[0]
+      : `${selected[0]} +${selected.length - 1}`;
+    $("tag-btn").title = selected.length > 1
+      ? `${selected.join(", ")} (${tagFilter.match === "all" ? "hepsi" : "herhangi biri"})`
+      : "";
+    $("tag-clear").hidden = selected.length === 0;
+
+    const listed = new Set(tagFilter.counts.map((t) => t.name));
+    const rows = [...tagFilter.counts, ...selected.filter((t) => !listed.has(t)).map((name) => ({ name, count: 0 }))]
+      .sort((a, b) => tagFilter.selected.has(b.name) - tagFilter.selected.has(a.name));
+    const options = $("tag-options");
+    options.replaceChildren(...rows.map((t) => {
+      const row = el("label", "tag-option");
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = tagFilter.selected.has(t.name);
+      box.addEventListener("change", () => applyFilter(() => toggleTag(t.name)));
+      row.append(box, el("span", "", t.name), el("span", "count", fmtNumber.format(t.count)));
+      return row;
+    }));
+    if (!rows.length) options.append(el("p", "muted", "Etiket yok"));
+  }
+
+  function setTagPanel(open) {
+    $("tag-panel").hidden = !open;
+    $("tag-btn").setAttribute("aria-expanded", String(open));
+  }
+  $("tag-btn").addEventListener("click", () => setTagPanel($("tag-panel").hidden));
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".tag-field")) setTagPanel(false);
+  });
+  $("tag-panel").parentElement.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("tag-panel").hidden) {
+      setTagPanel(false);
+      $("tag-btn").focus();
+    }
+  });
+  for (const b of document.querySelectorAll("#tag-panel [data-match]")) {
+    b.addEventListener("click", () => {
+      if (tagFilter.match === b.dataset.match) return;
+      setTagMatch(b.dataset.match);
+      renderTagFilter();
+      if (tagFilter.selected.size > 1) applyFilter(() => {});
+    });
+  }
+  $("tag-clear").addEventListener("click", () => applyFilter(() => {
+    tagFilter.selected.clear();
+    renderTagFilter();
+  }));
 
   // Each date bounds the other, so the browser's picker cannot produce a reversed range.
   for (const id of ["published_from", "published_to"]) {
@@ -846,7 +913,7 @@
     clearTimeout(debounce);
     debounce = setTimeout(() => { state.page = 1; loadContents(); }, 300);
   });
-  for (const id of ["provider", "tag", "sort", "per_page"]) {
+  for (const id of ["provider", "sort", "per_page"]) {
     $(id).addEventListener("change", () => { state.page = 1; loadContents(); });
   }
   $("filters").addEventListener("submit", (e) => { e.preventDefault(); state.page = 1; loadContents(); });

@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -15,11 +16,20 @@ const (
 	SortRelevance  SortBy = "relevance"
 )
 
+// TagMatch defines how several tags filter: items carrying any of them, or all of them.
+type TagMatch string
+
+const (
+	TagMatchAny TagMatch = "any"
+	TagMatchAll TagMatch = "all"
+)
+
 const (
 	DefaultPerPage   = 20
 	MaxPerPage       = 100
 	MaxKeywordLength = 200
 	MaxTagLength     = 50
+	MaxTags          = 20
 )
 
 // SearchQuery describes a content search request.
@@ -28,8 +38,10 @@ type SearchQuery struct {
 	Type    ContentType // empty means all types
 	// Provider filters by provider name; empty means all providers.
 	Provider string
-	// Tag keeps contents carrying this tag (tags are stored lowercase); empty means any.
-	Tag string
+	// Tags keeps contents carrying any or all of these tags, as TagMatch says (tags are stored
+	// lowercase); empty means no tag filter.
+	Tags     []string
+	TagMatch TagMatch
 	// PublishedFrom and PublishedTo bound the publication day, both inclusive (UTC dates);
 	// the zero time means unbounded.
 	PublishedFrom time.Time
@@ -49,9 +61,8 @@ func (q *SearchQuery) Normalize() error {
 	}
 
 	q.Provider = strings.ToLower(strings.TrimSpace(q.Provider))
-	q.Tag = strings.ToLower(strings.TrimSpace(q.Tag))
-	if utf8.RuneCountInString(q.Tag) > MaxTagLength {
-		return fmt.Errorf("%w: tag must be at most %d characters", ErrInvalidInput, MaxTagLength)
+	if err := q.normalizeTags(); err != nil {
+		return err
 	}
 	if !q.PublishedFrom.IsZero() && !q.PublishedTo.IsZero() && q.PublishedFrom.After(q.PublishedTo) {
 		return fmt.Errorf("%w: published_from must not be after published_to", ErrInvalidInput)
@@ -87,6 +98,41 @@ func (q *SearchQuery) Normalize() error {
 	}
 	if q.PerPage < 1 || q.PerPage > MaxPerPage {
 		return fmt.Errorf("%w: per_page must be between 1 and %d", ErrInvalidInput, MaxPerPage)
+	}
+	return nil
+}
+
+// normalizeTags lowercases the tags and drops blanks and duplicates. They are sorted, so the
+// same set of tags is the same query (and cache entry) in any order. Without tags the match
+// mode does not matter and is reset to the default.
+func (q *SearchQuery) normalizeTags() error {
+	var tags []string
+	for _, t := range q.Tags {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" {
+			continue
+		}
+		if utf8.RuneCountInString(t) > MaxTagLength {
+			return fmt.Errorf("%w: tag must be at most %d characters", ErrInvalidInput, MaxTagLength)
+		}
+		tags = append(tags, t)
+	}
+	slices.Sort(tags)
+	tags = slices.Compact(tags)
+	if len(tags) > MaxTags {
+		return fmt.Errorf("%w: at most %d tags can be filtered by", ErrInvalidInput, MaxTags)
+	}
+	q.Tags = tags
+
+	switch q.TagMatch {
+	case "":
+		q.TagMatch = TagMatchAny
+	case TagMatchAny, TagMatchAll:
+	default:
+		return fmt.Errorf("%w: unknown tag_match %q (expected any or all)", ErrInvalidInput, q.TagMatch)
+	}
+	if len(q.Tags) == 0 {
+		q.TagMatch = TagMatchAny
 	}
 	return nil
 }

@@ -850,17 +850,17 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 
 ## Arama ve Sıralama
 
-`GET /api/v1/contents?q=&type=video|text&provider=<ad>&tag=<etiket>&published_from=YYYY-MM-DD&published_to=YYYY-MM-DD&sort=popularity|relevance&page=1&per_page=20`
+`GET /api/v1/contents?q=&type=video|text&provider=<ad>&tag=<etiket>&tag=<etiket>&tag_match=any|all&published_from=YYYY-MM-DD&published_to=YYYY-MM-DD&sort=popularity|relevance&page=1&per_page=20`
 
 ![Alakalılık sıralaması](docs/images/contents-relevance.png)
 
 - **Anahtar kelime:** Başlık ve etiketlerde tam kelime eşleşmesi **veya** başlıkta kelimenin bir parçası. `"tam ifade"` ve `-hariç` sözdizimi desteklenir. Kullanıcı girdisindeki LIKE wildcard'ları (`%`, `_`) escape edilir.
 - **Filtreler:** Hepsi birbiriyle ve anahtar kelimeyle birlikte kullanılabilir.
   - `type` ve `provider`.
-  - `tag`: o etiketi taşıyan içerikler. Büyük/küçük harf duyarsız; etiketler küçük harfle saklandığı için sorgu `tags @> ARRAY[...]` şeklinde GIN index'i kullanır.
+  - `tag`: etiket filtresi; birden fazla etiket için parametre tekrarlanır (`tag=devops&tag=testing`, en fazla 20). `tag_match=any` (varsayılan) etiketlerden herhangi birini, `tag_match=all` hepsini taşıyan içerikleri getirir. Büyük/küçük harf duyarsız; etiketler küçük harfle saklandığı için sorgu `tags && ARRAY[...]` (any) ya da `tags @> ARRAY[...]` (all) şeklinde GIN index'i kullanır. Etiketler sıralanıp tekilleştirildiği için aynı küme hangi sırayla verilirse verilsin aynı cache kaydına düşer.
   - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
 
-  Dashboard'da etiket filtresi açılır listeden ya da kartlardaki etikete tıklanarak, tarih aralığı da iki tarih alanıyla seçilir. Aşağıda `devops` etiketi ve 14–15 Mart aralığı birlikte uygulanmış:
+  Dashboard'da etiketler seçim listesinden ya da kartlardaki etiketlere tıklanarak, tarih aralığı da iki tarih alanıyla seçilir. Aşağıda `devops` ve `testing` etiketleri (herhangi biri) ve 12–15 Mart aralığı birlikte uygulanmış:
 
   <img src="docs/images/filters.png" alt="Etiket ve tarih filtresi" width="700">
 - **Sıralama:**
@@ -934,7 +934,8 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzd�
 
   Dördüncü sütun, skor formülündeki etkileşim oranıdır. Sayılar 1 milyona kadar tam yazılır; Türkçe kısaltmadaki "B" (bin) "milyar" gibi okunabildiği için kısaltma sadece milyonun üstünde kullanılır.
 - **Filtreler:** Arama kutusu ve yanında tür için Tümü / Video / Metin seçimi; altında provider, etiket, yayın tarihi aralığı, sıralama ve sayfa boyutu; numaralı sayfalama.
-  - Etiket listesi mevcut bütün etiketleri kaç içerikte geçtikleriyle gösterir ("programming (5)"). Kartlardaki ve detay penceresindeki etiketlere tıklamak da aynı filtreyi seçer; aynı etikete tekrar tıklamak filtreyi kaldırır.
+  - Etiket filtresi bir seçim listesidir: mevcut bütün etiketler kaç içerikte geçtikleriyle listelenir, birden fazlası işaretlenebilir. Üstteki anahtar, seçilen etiketlerden **herhangi birini** (varsayılan) ya da **hepsini** taşıyan içeriklerin gösterileceğini belirler. Seçili etiketler listenin başında durur; düğmede "devops +1" gibi özetlenir.
+  - Kartlardaki ve detay penceresindeki etiketlere tıklamak o etiketi seçime ekler, tekrar tıklamak çıkarır.
   - Kartlarda etiketlerin hepsi başlığın altında ayrı bir satırda gösterilir.
   - Tarih alanları birbirini sınırlar, böylece ters bir aralık seçilemez.
 - **Hesap menüsü:** Sağ üstteki kullanıcı adı ve rolüne tıklanınca açılan menüde "Çıkış yap" bulunur; menü dışına tıklamak ya da Esc kapatır.

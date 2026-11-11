@@ -258,21 +258,36 @@ func TestSearchByTagAndDate(t *testing.T) {
 		return d
 	}
 
-	res := search(t, repo, domain.SearchQuery{Tag: "devops"})
+	res := search(t, repo, domain.SearchQuery{Tags: []string{"devops"}})
 	assert.ElementsMatch(t, []string{"Introduction to Docker", "Kubernetes for Beginners", "CI/CD Pipeline Implementation"}, titles(res))
 
 	// Both ends are inclusive days: 14:30 on the 14th is in, the 15th is out.
 	res = search(t, repo, domain.SearchQuery{PublishedFrom: day("2024-03-14"), PublishedTo: day("2024-03-14")})
 	assert.ElementsMatch(t, []string{"Advanced Go Concurrency Patterns", "Kubernetes for Beginners", "Clean Architecture in Go"}, titles(res))
 
-	res = search(t, repo, domain.SearchQuery{Tag: "programming", PublishedFrom: day("2024-03-14")})
+	res = search(t, repo, domain.SearchQuery{Tags: []string{"programming"}, PublishedFrom: day("2024-03-14")})
 	assert.ElementsMatch(t, []string{"Go Programming Tutorial", "Advanced Go Concurrency Patterns", "Clean Architecture in Go"}, titles(res),
 		"filters combine; an open end is unbounded")
 
-	res = search(t, repo, domain.SearchQuery{Keyword: "go", Tag: "testing", Sort: domain.SortRelevance})
+	res = search(t, repo, domain.SearchQuery{Keyword: "go", Tags: []string{"testing"}, Sort: domain.SortRelevance})
 	assert.Equal(t, []string{"Go Testing Best Practices"}, titles(res))
 
-	assert.Empty(t, titles(search(t, repo, domain.SearchQuery{Tag: "nope"})))
+	assert.Empty(t, titles(search(t, repo, domain.SearchQuery{Tags: []string{"nope"}})))
+}
+
+func TestSearchBySeveralTags(t *testing.T) {
+	repo, _ := newTestRepo(t)
+	seed(t, repo)
+
+	anyOf := search(t, repo, domain.SearchQuery{Tags: []string{"devops", "testing"}})
+	assert.ElementsMatch(t, []string{"Introduction to Docker", "Kubernetes for Beginners", "CI/CD Pipeline Implementation",
+		"Go Testing Best Practices"}, titles(anyOf), "any: items with at least one of the tags")
+
+	allOf := search(t, repo, domain.SearchQuery{Tags: []string{"programming", "testing"}, TagMatch: domain.TagMatchAll})
+	assert.Equal(t, []string{"Go Testing Best Practices"}, titles(allOf), "all: items with every tag")
+
+	none := search(t, repo, domain.SearchQuery{Tags: []string{"devops", "programming"}, TagMatch: domain.TagMatchAll})
+	assert.Empty(t, titles(none))
 }
 
 func TestMarkRemovedHidesAndRestores(t *testing.T) {
