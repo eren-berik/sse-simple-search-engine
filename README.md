@@ -31,7 +31,7 @@ Farklı formatlardaki (JSON, XML) içerik sağlayıcılardan (provider) veri top
 - [Puanlama](#puanlama)
 - [Arama ve Sıralama](#arama-ve-sıralama)
 - [Cache Stratejisi](#cache-stratejisi)
-- [Dashboard](#dashboard)
+- [Dashboard](#dashboard) · [Ekran görüntüleri](#ekran-görüntüleri)
 - [İzleme (Monitoring)](#izleme-monitoring)
 - [Testler](#testler)
 - [Konfigürasyon](#konfigürasyon)
@@ -480,7 +480,9 @@ Redis'e ulaşılamazsa hiçbiri sistemi durdurmaz: arama veritabanından yapıl�
 
 ## API
 
-Tüm uç noktalar gateway üzerinden (`:8080`) sunulur. Tam şema: [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi.yaml) ya da çalışan sistemde `/docs`.
+Tüm uç noktalar gateway üzerinden (`:8080`) sunulur. Tam şema: [`sse-gateway/openapi/openapi.yaml`](sse-gateway/openapi/openapi.yaml) ya da çalışan sistemde `/docs` (Swagger UI; endpoint'ler buradan token ile denenebilir).
+
+<img src="docs/images/swagger.png" alt="Swagger UI" width="700">
 
 | Metot | Yol | Yetki | Servis | Açıklama |
 |---|---|---|---|---|
@@ -653,6 +655,10 @@ Sıra diyagramı: [Kayıt, giriş, refresh ve logout](#kayıt-giriş-refresh-ve-
 | Provider ekleme / düzenleme / silme (`POST /providers`, `PATCH`/`DELETE /providers/{id}`) | | ✓ |
 | Sync tetikleme (`POST /sync`, `POST /providers/{id}/sync`) | | ✓ |
 
+Viewer'ın dashboard'unda "Provider'lar" sekmesi hiç yoktur (sağ üstte rol `VIEWER`); provider endpoint'lerine yazma istekleri gateway'de `403` ile reddedilir:
+
+<img src="docs/images/viewer.png" alt="Viewer görünümü" width="700">
+
 **Rol tipi:** Go'da string tabanlı bir enum (`type Role string`, sabitler `RoleAdmin`/`RoleViewer`), veritabanında `TEXT` ve `CHECK (role IN ('admin','viewer'))` olarak tutulur.
 - Integer'a göre JWT'de, JSON'da ve DB'de okunabilir; numaralandırma derdi yok.
 - PostgreSQL `ENUM` tipine göre yeni bir rol eklemek tek satırlık bir `CHECK` değişikliği; ENUM'dan değer silmek ise zor.
@@ -778,6 +784,10 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
   - `type` ve `provider`.
   - `tag`: o etiketi taşıyan içerikler. Büyük/küçük harf duyarsız; etiketler küçük harfle saklandığı için sorgu `tags @> ARRAY[...]` şeklinde GIN index'i kullanır.
   - `published_from` / `published_to`: yayın günü aralığı (`YYYY-MM-DD`, UTC). İki uç da dahil; yalnızca biri verilirse diğer taraf açıktır. Ters aralık ya da hatalı tarih `400 invalid_input` döner.
+
+  Dashboard'da etiket filtresi kartlardaki etikete tıklanarak, tarih aralığı da iki tarih alanıyla seçilir. Aşağıda `devops` etiketi ve 14–15 Mart aralığı birlikte uygulanmış:
+
+  <img src="docs/images/filters.png" alt="Etiket ve tarih filtresi" width="700">
 - **Sıralama:**
   - `popularity`: `score DESC`.
   - `relevance`: yalnızca gerçek eşleşmeyi puanlar.
@@ -785,7 +795,9 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
     - **Kelimenin yalnızca bir parçası geçiyorsa** (ör. "kuberne"): `word_similarity` kullanılır, 0,4 ile ölçeklenir; böylece her zaman tam eşleşmelerin altında kalır.
     - **Eşitlikte** popülerlik skoru belirler; aynı şekilde eşleşen içeriklerden daha değerli olan öne çıkar.
     - **Neden başlık benzerliği eklenmiyor:** İlk sürümde `similarity(title, q)` de ekleniyordu. Bu kısa başlıkları ödüllendiriyor ve harf tesadüflerine puan veriyordu: "testing" ile "programming" ortak "ing" içerdiği için aynı şekilde eşleşen içerikler %21 ile %31 arasına saçılıyordu. Çıkarılması yaygın kelimelerde sorguyu da hızlandırdı (634 → 372 ms, 1 milyon kayıtta).
-  - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity. Anahtar kelime olmadan istenen relevance, popularity'ye düşer; `meta.sort` hangisinin kullanıldığını bildirir, dashboard da bunu bir uyarıyla gösterir.
+  - `sort` verilmezse: anahtar kelime varsa relevance, yoksa popularity. Anahtar kelime olmadan istenen relevance, popularity'ye düşer; `meta.sort` hangisinin kullanıldığını bildirir, dashboard da bunu bir uyarıyla gösterir:
+
+    <img src="docs/images/sort-hint.png" alt="Kelimesiz alakalılık uyarısı" width="700">
 - **Eşleşme yüzdesi (`match`):** Ham alakalılık değeri (ör. 0,7295) kullanıcıya bir şey ifade etmediği için yanıtta ayrıca alakalılığın **aramanın en iyi sonucuna göre yüzdesi** döner (en iyisi 100).
   - Referans sayfa değil bütün aramadır: 2. sayfadaki bir sonuç da aynı ölçekte görünür. Referans değer `meta.best_relevance` olarak döner.
   - **1. sayfada** en iyi sonuç zaten listenin ilk satırıdır; ek bir şey hesaplanmaz. **Sonraki sayfalarda** en iyi değer `max(relevance) OVER ()` ile bulunur. Bu, çok satırla eşleşen aramalarda sorguyu %20–50 uzatır (bkz. [Ölçeklenme Planı](#ölçeklenme-planı)); bu yüzden yalnızca orada eklenir.
@@ -799,7 +811,9 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 
   Açıklama, sıralamayı yapan SQL'den gelir; ağırlıklar iki tarafın ortak kullandığı sabitlerdir. Testler, adımların PostgreSQL'in `ts_rank` sonucunu birebir verdiğini doğrular.
 
-  <img src="docs/images/detail-relevance.png" alt="Alakalılık kırılımı" width="520">
+  | Tam kelime eşleşmesi ("programming", yalnızca etikette) | Kelime parçası ("kuberne") |
+  |---|---|
+  | <img src="docs/images/detail-relevance.png" alt="Alakalılık kırılımı" width="420"> | <img src="docs/images/detail-partial.png" alt="Kısmi eşleşmenin kırılımı" width="420"> |
 
 - **Sayfalama:** offset/limit. Yanıtta `meta{page, per_page, total, total_pages, sort, best_relevance}` döner.
 
@@ -830,10 +844,6 @@ Final Skor = (Temel Puan × İçerik Türü Katsayısı) + Güncellik Puanı + E
 
 Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzdür (HTML, CSS, vanilla JS). Gateway binary'sine gömülüdür; açık ve koyu temayı sistem ayarına göre seçer ve telefon genişliğinde de çalışır.
 
-| Giriş | Koyu tema | Telefon |
-|---|---|---|
-| <img src="docs/images/login.png" alt="Giriş" width="300"> | <img src="docs/images/contents-dark.png" alt="Koyu tema" width="300"> | <img src="docs/images/mobile.png" alt="Telefon" width="150"> |
-
 - **Sonuç listesi:** Her içerik bir satır kartında gösterilir: sıra, tür ikonu, başlık, provider, tarih ve etiketler. Kartın sağında listenin neye göre sıralandığı öne çıkar:
   - **Popülerlik sıralamasında** büyük puntoyla skor.
   - **Alakalılık sıralamasında** dairesel bir eşleşme göstergesi ("%67", "Güçlü / Orta / Zayıf eşleşme"); skor küçük bir "Skor 298,25" etiketine iner.
@@ -853,7 +863,45 @@ Dashboard, framework ve build adımı olmadan yazılmış küçük bir arayüzd�
 - **Detay penceresi:** Metriklerin tam değerleri, skorun adım adım hesabı ([Puanlama](#puanlama)) ve alakalılık sıralamalı bir listeden açıldıysa alakalılığın adım adım hesabı ([Arama ve Sıralama](#arama-ve-sıralama)).
 - **Provider yönetimi (admin):** Provider tablosunda format, URL, durum ve son sync sonucu ("4 kayıt · değişiklik yok", "· 2 kaldırıldı") görünür. Sync, düzenleme, etkinleştirme ve silme işlemleri ikon butonlarla yapılır. Yeni provider formunda format otomatik algılanır ve ad kuralı alanın altında açıklanır.
 
-  ![Provider yönetimi](docs/images/providers.png)
+### Ekran görüntüleri
+
+**Giriş ve kayıt**
+
+| Giriş | Kayıt (rol seçimiyle) |
+|---|---|
+| <img src="docs/images/login.png" alt="Giriş" width="420"> | <img src="docs/images/register.png" alt="Kayıt" width="420"> |
+
+**İçerik listesi**
+
+| Popülerlik sıralaması | Alakalılık sıralaması ("programming") |
+|---|---|
+| <img src="docs/images/contents-popularity.png" alt="Popülerlik sıralaması" width="420"> | <img src="docs/images/contents-relevance.png" alt="Alakalılık sıralaması" width="420"> |
+
+| Etiket + tarih filtresi | Sonuç bulunamadı |
+|---|---|
+| <img src="docs/images/filters.png" alt="Filtreler" width="420"> | <img src="docs/images/empty.png" alt="Sonuç yok" width="420"> |
+
+**Detay penceresi**
+
+| Skor nasıl hesaplandı? | Alakalılık nasıl hesaplandı? |
+|---|---|
+| <img src="docs/images/detail-score.png" alt="Skor kırılımı" width="420"> | <img src="docs/images/detail-relevance.png" alt="Alakalılık kırılımı" width="420"> |
+
+**Provider yönetimi (admin)**
+
+| Provider tablosu ve yeni provider formu | Sync sonrası bildirim |
+|---|---|
+| <img src="docs/images/providers.png" alt="Provider tablosu" width="420"> | <img src="docs/images/sync-toast.png" alt="Sync bildirimi" width="420"> |
+
+| Provider düzenleme | Viewer görünümü (provider sekmesi yok) |
+|---|---|
+| <img src="docs/images/provider-edit.png" alt="Provider düzenleme" width="420"> | <img src="docs/images/viewer.png" alt="Viewer görünümü" width="420"> |
+
+**Koyu tema ve telefon**
+
+| Koyu tema (sistem ayarına göre) | Telefon genişliği |
+|---|---|
+| <img src="docs/images/contents-dark.png" alt="Koyu tema" width="420"> | <img src="docs/images/mobile.png" alt="Telefon" width="210"> |
 
 ### Dashboard'da oturum
 
